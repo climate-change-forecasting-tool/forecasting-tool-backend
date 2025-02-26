@@ -20,6 +20,17 @@ NASA POWER API: weather data
 
 sds = SummaryDataset()
 
+# import pandas as pd
+
+# pq_table = pd.read_parquet(
+#     path='data/summary_data.parquet', 
+#     engine='pyarrow'
+# )
+
+# print(pq_table.head())
+
+# exit(0)
+
 # sds.clear_dataset()
 
 sds.upload_data(start_date=datetime(1981, 1, 1), end_date=datetime(1990, 1, 1)) # 2018
@@ -57,8 +68,8 @@ sds.upload_data(start_date=datetime(1981, 1, 1), end_date=datetime(1990, 1, 1)) 
 
 # logging.info(df)
 
-# from .model import TFTransformer
+from .model import TFTransformer
 
-# tft = TFTransformer(datalist=datalist, column_names=colnames)
+tft = TFTransformer(parquet_df='db/summary_data.parquet')
 
 

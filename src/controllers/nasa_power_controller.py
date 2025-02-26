@@ -17,7 +17,7 @@ class NASAController:
 
     def execute_query(self, endpoint: str, params: dict):
         next_retry_time = 1
-        next_retry_delta = 2
+        next_retry_multi = 2
         retry = 0
         good_response = True
         while good_response and retry < MAX_RETRIES:
@@ -32,7 +32,7 @@ class NASAController:
                 case 429: 
                     logging.info(f"NASA POWER request limit reached {retry+1}. Retrying in {next_retry_time} seconds")
                     time.sleep(next_retry_time)
-                    next_retry_time += next_retry_delta
+                    next_retry_time *= next_retry_multi
                     break
                 case _:
                     logging.info(f"NASA POWER API error: {response.status_code}")
