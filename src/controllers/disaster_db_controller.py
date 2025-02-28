@@ -72,6 +72,7 @@ class DisasterDBController:
 
         combined_df = pd.merge(left=emdat_df, right=gdis_df, on='disasterno', how='inner') # 7326
 
+        # TODO: it might be wiser to keep this dataframe in-memory??? 1 SQL db for everything except geometry, 1 in-memory df with disaster no. and geometry
         combined_df['geometry'] = [wkt.dumps(geom) for geom in combined_df['geometry']]
 
         combined_df[['total_deaths', 'num_injured', 'damage_cost']] = combined_df[['total_deaths', 'num_injured', 'damage_cost']].astype(int)

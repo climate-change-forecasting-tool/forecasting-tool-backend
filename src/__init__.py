@@ -1,6 +1,6 @@
 import csv
 from datetime import datetime
-from .services import NOAAService, NASAService, DisasterDBService
+from .services import NOAAService, NASAService, DisasterDBService, LandQueryService
 import os
 from dotenv import load_dotenv
 import logging
@@ -31,7 +31,7 @@ sds = SummaryDataset()
 
 # exit(0)
 
-# sds.clear_dataset()
+sds.clear_dataset()
 
 sds.upload_data(start_date=datetime(1981, 1, 1), end_date=datetime(1990, 1, 1)) # 2018
 
@@ -68,8 +68,11 @@ sds.upload_data(start_date=datetime(1981, 1, 1), end_date=datetime(1990, 1, 1)) 
 
 # logging.info(df)
 
-from .model import TFTransformer
+# from .model import TFTransformer
 
-tft = TFTransformer(parquet_df='db/summary_data.parquet')
+# tft = TFTransformer(parquet_df='db/summary_data.parquet')
 
+# lqs = LandQueryService()
+
+# logging.info(lqs.query_point(*points[0]))
 

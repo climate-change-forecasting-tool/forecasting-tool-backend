@@ -4,6 +4,7 @@ from multiprocessing import freeze_support
 
 if __name__ == '__main__':
     import src
+
     freeze_support()
 
 

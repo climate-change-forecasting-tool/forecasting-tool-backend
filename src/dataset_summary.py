@@ -10,9 +10,11 @@ import os
 from threading import Lock
 import concurrent.futures
 import logging
+
+from src.utility import Timer
 logging.basicConfig(level=logging.INFO)
 
-from .services import DisasterDBService, NASAService, NOAAService
+from .services import DisasterDBService, NASAService, NOAAService, LandQueryService
 
 
 SUMMARY_DATASET_FILEPATH = 'db/summary_data.parquet'
@@ -27,6 +29,7 @@ class SummaryDataset:
     def __init__(self):
         self.disaster_serv = DisasterDBService()
         self.climate_serv = NASAService()
+        self.land_query_serv = LandQueryService()
 
         # Define a schema with column names and data types
         self.schema = pa.schema([
@@ -71,7 +74,8 @@ class SummaryDataset:
 
     def upload_data(self, start_date: datetime, end_date: datetime):
         # points = self.generate_biased_points(long_side=20, lat_side=11) # TODO: more data
-        points = [(-92.172935, 38.579201)]
+        points = self.generate_biased_points(long_side=50, lat_side=31) # TODO: more data
+        # points = [(-92.172935, 38.579201)]
 
         logging.info(f"Initial points len: {len(points)}")
 
@@ -94,76 +98,72 @@ class SummaryDataset:
         def single_upload(longitude, latitude):
             try:
                 logging.info(f"(long={longitude}, lat={latitude}): Processing...")
-                start_time = time.perf_counter()
+                with Timer() as t:
 
-                climate_df = NASAService.json_to_dataframe(
-                    data=self.climate_serv.climate_query(longitude, latitude, dates[0], dates[-1]),
-                    normalize_params=True
-                )
-
-                # Adjust timestamp to start from 0 and have an increment of 1 between contiguous times
-                climate_df['timestamp'] = (pd.to_datetime(climate_df['timestamp'], format='%Y%m%d') - start_date).dt.days.astype(np.uint64)
-
-                # logging.info(climate_df['timestamp'])
-                # logging.info(climate_df['timestamp'].dtype)
-                # logging.info(climate_df['timestamp'].astype(np.int64))
-                # exit(0)
-
-                logging.info(f"(long={longitude}, lat={latitude}): Gathering disaster data...")
-                disaster_data = []
-                for date in dates:
-                    disaster_data.append(
-                        self.disaster_serv.controller.query_spatiotemporal_point(longitude, latitude, date)[0] # TODO: maybe allow multiple
+                    climate_df = NASAService.json_to_dataframe(
+                        data=self.climate_serv.climate_query(longitude, latitude, dates[0], dates[-1]),
+                        normalize_params=True
                     )
-                disaster_data = np.array(disaster_data)
-                logging.info(f"(long={longitude}, lat={latitude}): Writing summary data to parquet file...")
-                batch_data = pa.table({
-                    "timestamp": climate_df['timestamp'],
-                    "longitude": [longitude] * len(dates), # climate_df['longitude']
-                    "latitude": [latitude] * len(dates), # climate_df['latitude']
-                    "elevation": climate_df['elevation'],
-                    "disastertype": disaster_data[:, 0], 
-                    "num_deaths": np.nan_to_num(x=disaster_data[:, 1].astype(dtype=np.float64), nan=0.0) / 100000000.0, # 100,000,000
-                    "num_injuries": np.nan_to_num(x=disaster_data[:, 2].astype(dtype=np.float64), nan=0.0) / 100000000.0, # 100,000,000
-                    "damage_cost": np.nan_to_num(x=disaster_data[:, 3].astype(dtype=np.float64), nan=0.0) / 1000000000000.0, # 1,000,000,000,000
-                    "avg_temperature_2m": climate_df['T2M'],
-                    "min_temperature_2m": climate_df['T2M_MIN'],
-                    "max_temperature_2m": climate_df['T2M_MAX'],
-                    "dewfrostpoint_2m": climate_df['T2MDEW'],
-                    "precipitation": climate_df['PRECTOTCORR'],
-                    "avg_windspeed_2m": climate_df['WS2M'], # only back to 1980/12/31
-                    "min_windspeed_2m": climate_df['WS2M_MIN'],
-                    "max_windspeed_2m": climate_df['WS2M_MAX'],
-                    "avg_windspeed_10m": climate_df['WS10M'],
-                    "min_windspeed_10m": climate_df['WS10M_MIN'],
-                    "max_windspeed_10m": climate_df['WS10M_MAX'],
-                    "avg_windspeed_50m": climate_df['WS50M'],
-                    "min_windspeed_50m": climate_df['WS50M_MIN'],
-                    "max_windspeed_50m": climate_df['WS50M_MAX'],
-                    "humidity_2m": climate_df['RH2M'],
-                    "surface_pressure": climate_df['PS'],
-                    "transpiration": climate_df['EVPTRNS'],
-                    "evaporation": climate_df['EVLAND'],
-                })
-                with thread_lock:
-                    # if not parquet_writer.is_open:
-                    #     logging.info("Parquet writer is no longer open! Quitting...")
-                    #     return
-                    # parquet_writer.write_table(batch_data)
-                    pq.write_to_dataset(table=batch_data, 
-                                        root_path=SUMMARY_DATASET_FILEPATH,
-                                        schema=self.schema,
-                                        existing_data_behavior='delete_matching')
 
-                    logging.info(f"(long={longitude}, lat={latitude}): complete!")
+                    # Adjust timestamp to start from 0 and have an increment of 1 between contiguous times
+                    climate_df['timestamp'] = (pd.to_datetime(climate_df['timestamp'], format='%Y%m%d') - start_date).dt.days.astype(np.uint64)
 
-                    end_time = time.perf_counter()
-                    total_time = int(end_time - start_time)
-                    logging.info(f"Elapsed time: {int(total_time / 60):02d}:{total_time % 60:02d} mins")
+                    # logging.info(climate_df['timestamp'])
+                    # logging.info(climate_df['timestamp'].dtype)
+                    # logging.info(climate_df['timestamp'].astype(np.int64))
+                    # exit(0)
 
-                    nonlocal num_tasks
-                    num_tasks -= 1
-                    logging.info(f"Number of tasks remaining: {num_tasks}")
+                    logging.info(f"(long={longitude}, lat={latitude}): Gathering disaster data...")
+                    disaster_data = []
+                    for date in dates:
+                        disaster_data.append(
+                            self.disaster_serv.controller.query_spatiotemporal_point(longitude, latitude, date)[0] # TODO: maybe allow multiple
+                        )
+                    disaster_data = np.array(disaster_data)
+                    logging.info(f"(long={longitude}, lat={latitude}): Writing summary data to parquet file...")
+                    batch_data = pa.table({
+                        "timestamp": climate_df['timestamp'],
+                        "longitude": [longitude] * len(dates), # climate_df['longitude']
+                        "latitude": [latitude] * len(dates), # climate_df['latitude']
+                        "elevation": climate_df['elevation'],
+                        "disastertype": disaster_data[:, 0], 
+                        "num_deaths": np.nan_to_num(x=disaster_data[:, 1].astype(dtype=np.float64), nan=0.0) / 100000000.0, # 100,000,000
+                        "num_injuries": np.nan_to_num(x=disaster_data[:, 2].astype(dtype=np.float64), nan=0.0) / 100000000.0, # 100,000,000
+                        "damage_cost": np.nan_to_num(x=disaster_data[:, 3].astype(dtype=np.float64), nan=0.0) / 1000000000000.0, # 1,000,000,000,000
+                        "avg_temperature_2m": climate_df['T2M'],
+                        "min_temperature_2m": climate_df['T2M_MIN'],
+                        "max_temperature_2m": climate_df['T2M_MAX'],
+                        "dewfrostpoint_2m": climate_df['T2MDEW'],
+                        "precipitation": climate_df['PRECTOTCORR'],
+                        "avg_windspeed_2m": climate_df['WS2M'], # only back to 1980/12/31
+                        "min_windspeed_2m": climate_df['WS2M_MIN'],
+                        "max_windspeed_2m": climate_df['WS2M_MAX'],
+                        "avg_windspeed_10m": climate_df['WS10M'],
+                        "min_windspeed_10m": climate_df['WS10M_MIN'],
+                        "max_windspeed_10m": climate_df['WS10M_MAX'],
+                        "avg_windspeed_50m": climate_df['WS50M'],
+                        "min_windspeed_50m": climate_df['WS50M_MIN'],
+                        "max_windspeed_50m": climate_df['WS50M_MAX'],
+                        "humidity_2m": climate_df['RH2M'],
+                        "surface_pressure": climate_df['PS'],
+                        "transpiration": climate_df['EVPTRNS'],
+                        "evaporation": climate_df['EVLAND'],
+                    })
+                    with thread_lock:
+                        # if not parquet_writer.is_open:
+                        #     logging.info("Parquet writer is no longer open! Quitting...")
+                        #     return
+                        # parquet_writer.write_table(batch_data)
+                        pq.write_to_dataset(table=batch_data, 
+                                            root_path=SUMMARY_DATASET_FILEPATH,
+                                            schema=self.schema,
+                                            existing_data_behavior='delete_matching')
+
+                        logging.info(f"(long={longitude}, lat={latitude}): complete!")
+
+                        nonlocal num_tasks
+                        num_tasks -= 1
+                        logging.info(f"Number of tasks remaining: {num_tasks}")
             except Exception as e:
                 logging.error(e)
 
@@ -211,12 +211,13 @@ class SummaryDataset:
             lat_side (int): number of horizontal divisions across the world. Ensure this is greater than 2.
                 Best for this to be an odd number so that it has points on the equator.
 
+        Only generates points on land.
         """
         
         # Generate longitude uniformly between -180 and 180, but exclude 180 from the bounds, b/c it is the same as -180
         longitudes = np.linspace(start=-180, stop=180, num=long_side, endpoint=False)
         
-        # Generate latitude uniformly biased toward equator between -90 and 90
+        # Generate latitude uniformly biased toward equator between -90 and 90;;;;; reduce from -90 to -57.5
         tan_bound = np.pi / 4.
         latitudes = np.linspace(start=-tan_bound, stop=tan_bound, num=lat_side)
 
@@ -234,7 +235,20 @@ class SummaryDataset:
         # add poles
         points.append((0.0, -90.0))
         points.append((0.0, 90.0))
-        
+
+        logging.info(f"Initial count: {len(points)}")
+
+        points[:] = itertools.filterfalse(self.land_query_serv.is_in_water, points)
+
+        logging.info(f"Filtered count: {len(points)}")
+
+        import matplotlib.pyplot as plt
+
+        xs, ys = zip(*points)
+        plt.scatter(xs, ys, c='red')
+        plt.show()
+
+        exit(0)
         return points
     
     def fetch_nonexisting_set(self, points):
