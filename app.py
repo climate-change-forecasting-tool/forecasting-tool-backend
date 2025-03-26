@@ -1,6 +1,6 @@
 from multiprocessing import freeze_support
 
-# latitude [-90, 90) and longitude [-180, 180)
+# latitude [-90, 90] and longitude [-180, 180)
 
 if __name__ == '__main__':
     import src
@@ -13,6 +13,7 @@ if __name__ == '__main__':
 
 Temporal extent:
 gdis: (1960-01-01)-(2018-12-31)
+NASA climate data: (1980-12-31)-(?)
 
 
 Spatial extent:

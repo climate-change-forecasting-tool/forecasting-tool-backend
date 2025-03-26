@@ -1,6 +1,7 @@
 import csv
 from datetime import datetime
 from .services import NOAAService, NASAService, DisasterDBService, LandQueryService
+from .configuration.config import Config
 import os
 from dotenv import load_dotenv
 import logging
@@ -18,22 +19,24 @@ NASA POWER API: weather data
 
 """
 
+# ddbs = DisasterDBService()
+
+# import fiona 
+# print(fiona.supported_drivers)
+
+# lqs = LandQueryService()
+
+# lqs.dostuff()
+
+
+
 sds = SummaryDataset()
 
-# import pandas as pd
+if Config.generate_summary_dataset:
+    if Config.recreate_summary_dataset:
+        sds.clear_dataset()
 
-# pq_table = pd.read_parquet(
-#     path='data/summary_data.parquet', 
-#     engine='pyarrow'
-# )
-
-# print(pq_table.head())
-
-# exit(0)
-
-sds.clear_dataset()
-
-sds.upload_data(start_date=datetime(1981, 1, 1), end_date=datetime(1990, 1, 1)) # 2018
+    sds.upload_data(start_date=Config.start_date, end_date=Config.end_date) # 2018
 
 # ddbs = DisasterDBService()
 
@@ -72,7 +75,4 @@ sds.upload_data(start_date=datetime(1981, 1, 1), end_date=datetime(1990, 1, 1)) 
 
 # tft = TFTransformer(parquet_df='db/summary_data.parquet')
 
-# lqs = LandQueryService()
-
-# logging.info(lqs.query_point(*points[0]))
 

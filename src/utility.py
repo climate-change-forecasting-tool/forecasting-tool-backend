@@ -28,11 +28,14 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 class Timer:
+    def __init__(self, name: str = None):
+        self.name = name
+
     def __enter__(self):
         self.start = perf_counter()
         return self
     
     def __exit__(self, type, value, traceback):
         self.elapsed_time = perf_counter() - self.start
-        self.output = f"Elapsed time: {int(self.elapsed_time / 60):02d}:{self.elapsed_time % 60:02d} mins"
+        self.output = f"{'('+self.name+') ' if self.name else ''}Elapsed time: {int(self.elapsed_time / 60):02d}:{int(self.elapsed_time % 60):02d}"
         logging.info(self.output)

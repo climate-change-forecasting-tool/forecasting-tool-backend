@@ -14,6 +14,8 @@ import logging
 
 logging.basicConfig(level=logging.INFO)
 
+# https://github.com/sktime/pytorch-forecasting/issues/359
+
 class TFTransformer: # datalist, column_names, 
     def __init__(self, parquet_df, train_split: float = 0.6, validation_split: float = 0.2):
         """
