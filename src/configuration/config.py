@@ -9,6 +9,7 @@ class Config:
     ### disaster database
 
     recreate_disaster_database = False
+    show_disasters = False # TODO: implement
     # TODO: also maybe add vars and stuff to show the plots
 
     ### summary dataset
@@ -16,11 +17,11 @@ class Config:
     # main driver for summary dataset:
     generate_summary_dataset = True
 
-    recreate_summary_dataset = False
+    recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
     start_date = datetime(1981, 1, 1) # earliest is 1981
     end_date = datetime(1990, 1, 1) # latest is 2018
     pointgen_instep = 5.0
     pointgen_circumstep = 7.0
     pointgen_absorb_radius = 0.0
-    show_points = True
-    num_workers = 2
+    show_points = True # shows all points on world map
+    num_workers = 2 # number of workers used to make data for summary dataset

@@ -48,4 +48,17 @@ Data processing
         - 
 4. Save to dataset
 
+
+
+For processing data either:
+    - Quadtrees for disaster geometry centroids
+    - Keeping all disaster geometries in memory
+        - Query disaster dataset for dates 
+    
+- Use population data from CARTO
+
+Number of points for a given tile side length:
+    y = 0.3*(40000/x)^2
+    where x is distance in kilometers
+
 """

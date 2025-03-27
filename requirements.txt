@@ -16,3 +16,5 @@ pyarrow==19.0.0
 dask==2025.2.0
 fastparquet==2024.11.0
 fiona==1.10.1
+matplotlib==3.9.0
+python-dotenv==1.0.1

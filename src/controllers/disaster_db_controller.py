@@ -25,12 +25,13 @@ class DisasterDBController:
     
     def create_table(self):
 
-        if Config.recreate_disaster_database:
-            self.clear_all()
+        if os.path.exists(self.db_file_path):
+            if Config.recreate_disaster_database:
+                self.clear_all()
 
-        elif self.check_table_exists():
-            logging.info("Skipping disaster db creation!")
-            return
+            elif self.check_table_exists():
+                logging.info("Skipping disaster db creation!")
+                return
 
         logging.info("Creating disaster db...")
         gdis_df = gpd.read_file( # TODO: evaluate each disaster's geometry mapped to explain why there is duplicate data & other stuff
@@ -89,8 +90,8 @@ class DisasterDBController:
 
         combined_df[['total_deaths', 'num_injured', 'damage_cost']] = combined_df[['total_deaths', 'num_injured', 'damage_cost']].astype(int)
 
-        # write back
-        combined_df.to_file(data='data/disasters.gdb', driver='OpenFileGDB') # TODO: FIX
+        # write back (for making a gdb file which has the combined geometric data so we don't have to merge 2 databases over and over)
+        # combined_df.to_file(data='data/disasters.gdb', driver='OpenFileGDB') # TODO: FIX
 
         # TODO: it might be wiser to keep this dataframe in-memory??? 1 SQL db for everything except geometry, 1 in-memory df with disaster no. and geometry
         combined_df['geometry'] = [wkt.dumps(geom) for geom in combined_df['geometry']]
