@@ -32,16 +32,16 @@ NASA POWER API: weather data
 
 
 
-pgs = PointGenerator()
+# pgs = PointGenerator()
 
 
-# sds = SummaryDataset()
+sds = SummaryDataset()
 
-# if Config.generate_summary_dataset:
-#     if Config.recreate_summary_dataset:
-#         sds.clear_dataset()
+if Config.generate_summary_dataset:
+    if Config.recreate_summary_dataset:
+        sds.clear_dataset()
 
-#     sds.upload_data(start_date=Config.start_date, end_date=Config.end_date) # 2018
+    sds.upload_data(start_date=Config.start_date, end_date=Config.end_date) # 2018
 
 # ddbs = DisasterDBService()
 

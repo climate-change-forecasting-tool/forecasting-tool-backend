@@ -9,7 +9,7 @@ class Config:
     ### disaster database
 
     furthest_back_time = datetime(1981, 1, 1)
-    recreate_disaster_database = False
+    recreate_disaster_database = True
     show_disasters = False # TODO: implement
     # TODO: also maybe add vars and stuff to show the plots
 
@@ -18,7 +18,7 @@ class Config:
     # main driver for summary dataset:
     generate_summary_dataset = True
 
-    recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
+    recreate_summary_dataset = True # if True, all data from summary dataset will be cleared before processing
     start_date = datetime(1981, 1, 1) # earliest is 1981
     end_date = datetime(1990, 1, 1) # latest is 2018
     pointgen_instep = 5.0
