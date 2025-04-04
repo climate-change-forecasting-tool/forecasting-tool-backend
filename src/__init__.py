@@ -1,5 +1,7 @@
 import csv
 from datetime import datetime
+
+from src.point_generation_service import PointGenerator
 from .services import NOAAService, NASAService, DisasterDBService, LandQueryService
 from .configuration.config import Config
 import os
@@ -30,13 +32,16 @@ NASA POWER API: weather data
 
 
 
-sds = SummaryDataset()
+pgs = PointGenerator()
 
-if Config.generate_summary_dataset:
-    if Config.recreate_summary_dataset:
-        sds.clear_dataset()
 
-    sds.upload_data(start_date=Config.start_date, end_date=Config.end_date) # 2018
+# sds = SummaryDataset()
+
+# if Config.generate_summary_dataset:
+#     if Config.recreate_summary_dataset:
+#         sds.clear_dataset()
+
+#     sds.upload_data(start_date=Config.start_date, end_date=Config.end_date) # 2018
 
 # ddbs = DisasterDBService()
 

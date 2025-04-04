@@ -16,23 +16,7 @@ logging.basicConfig(level=logging.INFO)
 DB_FILE_PATH = "data/disasters.db"
 
 class DisasterDBController:
-    def __init__(self, db_file_path = DB_FILE_PATH):
-        if db_file_path is None:
-            self.db_file_path = DB_FILE_PATH
-
-        self.db_file_path = db_file_path
-        self.create_table()
-    
-    def create_table(self):
-
-        if os.path.exists(self.db_file_path):
-            if Config.recreate_disaster_database:
-                self.clear_all()
-
-            elif self.check_table_exists():
-                logging.info("Skipping disaster db creation!")
-                return
-
+    def get_table(self):
         logging.info("Creating disaster db...")
         gdis_df = gpd.read_file( # TODO: evaluate each disaster's geometry mapped to explain why there is duplicate data & other stuff
             filename="data/pend-gdis-1960-2018-disasterlocations-gdb/pend-gdis-1960-2018-disasterlocations.gdb", 
@@ -44,8 +28,6 @@ class DisasterDBController:
 
         # exclude volcanoes & earthquakes
         gdis_df.drop(gdis_df[gdis_df['disastertype'].isin(['volcanic activity', 'earthquake'])].index, inplace=True)
-
-        # print(gdis_df)
 
         # filter out entries that have null iso3's
         gdis_df = gdis_df.loc[gdis_df['iso3'].notnull()] # TODO: this might need to be fixed
@@ -88,102 +70,13 @@ class DisasterDBController:
 
         combined_df.fillna(0, inplace=True)
 
+        # logging.info(combined_df.columns)
+
         combined_df[['total_deaths', 'num_injured', 'damage_cost']] = combined_df[['total_deaths', 'num_injured', 'damage_cost']].astype(int)
+        combined_df['start_date'] = pd.to_datetime(combined_df['start_date'])
 
-        # write back (for making a gdb file which has the combined geometric data so we don't have to merge 2 databases over and over)
-        # combined_df.to_file(data='data/disasters.gdb', driver='OpenFileGDB') # TODO: FIX
+        # TODO: drop all entries preceding the furthest back point
+        combined_df['end_date'] = pd.to_datetime(combined_df['end_date'])
+        combined_df = combined_df[combined_df['end_date'] >= Config.furthest_back_time]
 
-        # TODO: it might be wiser to keep this dataframe in-memory??? 1 SQL db for everything except geometry, 1 in-memory df with disaster no. and geometry
-        combined_df['geometry'] = [wkt.dumps(geom) for geom in combined_df['geometry']]
-
-        with sqlite3.connect(self.db_file_path) as conn:
-            cur = conn.cursor()
-            combined_df.to_sql('disasters', conn, if_exists='replace', index=False)
-            conn.commit()
-            cur.close()
-
-        logging.info("table creation complete!")
-    
-    def get_geometry_df(self, num_rows: int = None):
-        gdis_df = gpd.read_file(
-            filename="data/pend-gdis-1960-2018-disasterlocations-gdb/pend-gdis-1960-2018-disasterlocations.gdb", 
-            columns=['disasterno', 'disastertype', 'geometry'],
-            ignore_geometry=False,
-            rows=num_rows
-        )
-
-        gdis_df.drop(gdis_df[gdis_df['disastertype'].isin(['volcanic activity', 'earthquake'])].index, inplace=True)
-
-        return gdis_df
-    
-    def get_intersecting_disasters_df(self, mask: Polygon):
-        gdis_df = gpd.read_file(
-            filename="data/pend-gdis-1960-2018-disasterlocations-gdb/pend-gdis-1960-2018-disasterlocations.gdb", 
-            columns=['disasterno', 'disastertype', 'geometry'],
-            ignore_geometry=False,
-            mask=mask
-        )
-
-        gdis_df.drop(gdis_df[gdis_df['disastertype'].isin(['volcanic activity', 'earthquake'])].index, inplace=True)
-
-        return gdis_df
-
-    spacetime_query = "SELECT disastertype, total_deaths, num_injured, damage_cost, geometry FROM disasters WHERE start_date <= ? AND end_date >= ?"
-
-    def query_spatiotemporal_point(self, longitude: float, latitude: float, timestamp: str):
-        """
-        Args:
-            longitude (float): the longitude of chosen point to query
-            latitude (float): the latitude of chosen point to query
-            timestamp (str): the time of when to query; formatted like 'YYYYMMDD'
-        """
-
-        location_pin = Point(longitude, latitude) # chosen by user
-        threshold = 30 # TODO: is arbitrary, so test
-
-        with sqlite3.connect(self.db_file_path) as conn:
-            cur = conn.cursor()
-            cur.execute(
-                self.spacetime_query, 
-                (timestamp, timestamp)
-            )
-            results = cur.fetchall()
-            cur.close()
-
-        events = []
-        for entry in results:
-            geom = wkt.loads(entry[4])
-            dist = location_pin.distance(geom.centroid)
-            if dist < threshold and self.is_inside(location_pin, geom):
-                # disasterno, total_deaths, num_injured, damage_cost, start_date, end_date, disastertype, geometry
-                # disastertype, total_deaths, num_injured, damage_cost
-                events.append([entry[0], entry[1], entry[2], entry[3]])
-                break # TODO: perhaps disable later to account for multiple weather events at the same time in the same location
-
-        if not events:
-            return [['nothing', 0, 0, 0]]
-
-        return events
-
-    def is_inside(self, point, geometry):
-        gdf = gpd.GeoSeries([geometry])
-        return gdf.contains(point)[0]
-    
-    def clear_all(self):
-        """
-        Deletes all entries from the table.
-        """
-        with sqlite3.connect(self.db_file_path) as conn:
-            cur = conn.cursor()
-            cur.execute("DELETE FROM disasters")
-            conn.commit()
-            cur.close()
-
-    def check_table_exists(self):
-        # SELECT name FROM sqlite_master WHERE type='table' AND name='{table_name}';
-        with sqlite3.connect(self.db_file_path) as conn:
-            cur = conn.cursor()
-            cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='disasters';")
-            result = cur.fetchone()
-            cur.close()
-        return result is not None
+        return combined_df
