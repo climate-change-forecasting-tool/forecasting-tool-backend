@@ -3,6 +3,7 @@ import time
 from typing import List, Literal
 import requests
 import logging
+from requests.exceptions import RequestException
 
 logging.basicConfig(level=logging.INFO)
 
@@ -14,32 +15,36 @@ MAX_RETRIES = 5
 class NASAController:
     def __init__(self):
         self.entry_url = "https://power.larc.nasa.gov/api"
+        self.session = requests.Session()
 
     def execute_query(self, endpoint: str, params: dict):
-        next_retry_time = 1
+        next_retry_time = 5
         next_retry_multi = 2
         retry = 0
-        good_response = True
-        while good_response and retry < MAX_RETRIES:
-            response = requests.get(url=self.entry_url + endpoint, 
-                                    params=params)
-            response.close()
-            match(response.status_code):
-                case 200: # accepted
-                    # the response's data is JSON
-                    response_data = response.json()
-                    return response_data
-                case 429: 
-                    logging.info(f"NASA POWER request limit reached {retry+1}. Retrying in {next_retry_time} seconds")
-                    time.sleep(next_retry_time)
-                    next_retry_time *= next_retry_multi
-                    break
-                case _:
-                    logging.info(f"NASA POWER API error: {response.status_code}")
-                    good_response = False
-                    break
-            retry += 1
+        while retry < MAX_RETRIES:
+            try:
+                response = self.session.get(url=self.entry_url + endpoint, params=params)
+                response.close()
+            except RequestException as e:
+                logging.info(f"RequestException encountered: {e}. Retrying in {next_retry_time} seconds...")
+                time.sleep(next_retry_time)
+                next_retry_time *= next_retry_multi
+                retry += 1
+                continue
+
+            if response.status_code == 200:
+                return response.json()
+            elif response.status_code == 429:
+                logging.info(f"NASA POWER request limit reached {retry+1}. Retrying in {next_retry_time} seconds")
+                time.sleep(next_retry_time)
+                next_retry_time *= next_retry_multi
+                retry += 1
+            else:
+                logging.info(f"NASA POWER API error: {response.status_code}")
+                break
+
         return {}
+
     
     def point_time_query(self, parameters: List[str], start: str, end: str, longitude: float, latitude: float, community: Literal['AG', 'SB', 'RB'], time_resolution: Literal['hourly', 'daily', 'monthly', 'climatology']):
         if datetime.strptime(end, "%Y%m%d") < datetime.strptime(start, "%Y%m%d") or datetime.strptime(start, "%Y%m%d") > datetime.now():
