@@ -9,7 +9,7 @@ class Config:
     ### disaster database
 
     furthest_back_time = datetime(1981, 1, 1)
-    recreate_disaster_database = True
+    recreate_disaster_database = False
     show_disasters = False # TODO: implement
     # TODO: also maybe add vars and stuff to show the plots
 

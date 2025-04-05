@@ -11,6 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pandas as pd
 from rtree import index
+from src.utility import Timer
 
 from src.configuration.config import Config
 from src.services.disaster_db_service import DisasterDBService
@@ -72,62 +73,77 @@ class PointGenerator:
 
         gdf = disaster_serv.controller.get_table()
 
-        # Make a union of all of the disaster regions
-        logging.info("Creating union of disasters...")
-        combined_disasters = unary_union(gdf.geometry)
-
-        # Reduce the number of polygons to only polygons that intersect with disaster regions
-        logging.info("Removing hexagons that don't have disasters...")
-        disaster_polygons = [h for h in polygons if h.intersects(combined_disasters)]
-
-        # Intersect the disaster and polygon regions
-        logging.info("Intersecting hexagons with disasters...")
-        disaster_intersections = [h.intersection(combined_disasters) for h in disaster_polygons]
-
-        # Generate a random point in the intersected region
-        logging.info("Generating points within hexagons...")
-        carpet_points = [self.random_point_in_polygon(p) for p in disaster_intersections]
-
         # TODO: use rtree spatial indexing to boost processing speed of geometry intersections
         
         # if using rtree, we don't necessarily need to have an exact intersection of polygon with hexagon & one single disaster,
         # then choose random point in that intersection
 
-        # # Making rtree
-        # idx = index.Index()
+        logging.info("Making rtree")
+        # Making rtree
+        with Timer("Rtree") as t:
+            idx = index.Index()
 
-        # for idx_gdf, geometry in gdf.iterrows():
-        #     # Insert the bounding box of each geometry (geometry.bounds is a tuple of (minx, miny, maxx, maxy))
-        #     idx.insert(idx_gdf, geometry.geometry.bounds)
+            gdf['id'] = range(1, len(gdf) + 1)
+            gdf.set_index('id', inplace=True)
+
+            for row in gdf.itertuples(index=True):
+                # logging.info(f"Processing geom {int(row.Index)}")
+                # Insert the bounding box of each geometry (geometry.bounds is a tuple of (minx, miny, maxx, maxy))
+                idx.insert(int(row.Index), row.geometry.bounds)
+
+        logging.info("Making intersections")
+        with Timer("Intersections") as t:
+            def get_intersection(polygon: Polygon):
+                possible_matches = list(idx.intersection(polygon.bounds))  # Get candidate polygons
+                for match_id in possible_matches:
+                    candidate_polygon = gdf.loc[match_id, "geometry"]
+                    intersection = polygon.intersection(candidate_polygon)
+                    if not intersection.is_empty:
+                        return intersection
+                return None
+            
+            intersections = []
+            for i, polygon in enumerate(polygons):
+                intersection = get_intersection(polygon)
+                if intersection:
+                    intersections.append(intersection)
+
+        # Generate a random point in the intersected region
+        logging.info("Generating points within hexagons...")
+        with Timer("Random hexagon points") as t:
+            carpet_points = [self.random_point_in_polygon(p) for p in intersections]
 
         parquet_writer = pq.ParquetWriter(where=DB_FILE_PATH, schema=self.schema)
 
         # saving longitude, latitude, dates, disastertype, num deaths, num injuries, property damage cost
         logging.info("Saving values...")
-        for point in carpet_points:
-            filtered_gdf = gdf[gdf.contains(point)]
+        with Timer("Saving values") as t:
+            def get_intersection_ids(point: Point):
+                possible_matches = list(idx.intersection(point.bounds))  # Get candidate polygons
+                true_intersection_ids = []
+                for match_id in possible_matches:
+                    candidate_polygon = gdf.loc[match_id, "geometry"]
+                    if point.intersects(candidate_polygon):
+                        true_intersection_ids.append(match_id)
+                return true_intersection_ids
 
-            logging.info(filtered_gdf.columns)
+            for i, point in enumerate(carpet_points):
+                filtered_gdf = gdf.loc[get_intersection_ids(point)]
 
-            logging.info(filtered_gdf)
-            # exit(0)
+                for row in filtered_gdf.itertuples():
+                    dates = pd.date_range(start=row.start_date, end=row.end_date, freq="D", inclusive="both")
 
-            for row in filtered_gdf.itertuples():
-                dates = pd.date_range(start=row.start_date, end=row.end_date, freq="D", inclusive="both")
-
-                temp_df = pd.DataFrame(
-                    {
-                        "timestamp": dates,
-                        "longitude": [row.longitude] * len(dates),
-                        "latitude": [row.latitude] * len(dates),
+                    entry = pa.table({
+                        "timestamp": pa.array(dates, type=pa.date64()),
+                        "longitude": [point.x] * len(dates),
+                        "latitude": [point.y] * len(dates),
                         "disastertype": [row.disastertype] * len(dates),
                         "total_deaths": [row.total_deaths] * len(dates),
                         "num_injured": [row.num_injured] * len(dates),
                         "damage_cost": [row.damage_cost] * len(dates),
-                    }
-                )
+                    })
 
-                parquet_writer.write_table(table=temp_df)
+                    parquet_writer.write_table(table=entry)
 
         parquet_writer.close()
 
@@ -178,7 +194,7 @@ class PointGenerator:
 
         pq_table.drop(['longitude', 'latitude'], axis=1, inplace=True)
 
-        dates = set(pq_table['date']).difference(set(dates))
+        dates = set(pd.to_datetime(pq_table['timestamp'])).difference(set(dates))
 
         nodisaster_table = pd.DataFrame({
             "timestamp": dates,
