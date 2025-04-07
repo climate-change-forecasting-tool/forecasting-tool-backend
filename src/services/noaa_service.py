@@ -27,7 +27,6 @@ class NOAAService:
         limit_window = 1000
         response = self.retrieve_station_data(stationid=stationid, limit=limit_window)
         all_data.extend(response.get('results'))
-        # count = response.get('metadata', dict()).get('resultset', dict()).get('count', 0)
         count = multiget(response, ['metadata', 'resultset', 'count'], 0)
         for i in range(1+limit_window, min(100, count), limit_window):
             all_data.extend(response.get('results'))

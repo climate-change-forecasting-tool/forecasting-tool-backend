@@ -13,15 +13,12 @@ from threading import Lock
 import concurrent.futures
 import logging
 import os
-import math
 
-from shapely import Point, Polygon
-
-from src.point_generation_service import PointGenerator
+from src.datamodels import PointGenerationModel, LandQueryModel
 from src.utility import Timer
 logging.basicConfig(level=logging.INFO)
 
-from .services import NASAService, NOAAService, LandQueryService
+from .services import NASAService, NOAAService
 from .configuration.config import Config
 
 SUMMARY_DATASET_FILEPATH = 'db/summary_data.parquet'
@@ -33,14 +30,10 @@ SUMMARY_DATASET_FILEPATH = 'db/summary_data.parquet'
 
 class SummaryDataset:
 
-    def __init__(self, summary_dataset_filepath: str = None):
-        self.summary_dataset_filepath = summary_dataset_filepath
-
-        if summary_dataset_filepath is None:
-            self.summary_dataset_filepath = SUMMARY_DATASET_FILEPATH
+    def __init__(self):
 
         self.climate_serv = NASAService()
-        self.point_generator = PointGenerator()
+        self.point_generator = PointGenerationModel()
 
         # Define a schema with column names and data types
         # if os.path.exists(self.summary_dataset_filepath):
@@ -53,7 +46,7 @@ class SummaryDataset:
             ("elevation", pa.float64()),
             ("disastertype", pa.string()), 
             ("num_deaths", pa.float64()),
-            ("num_injuries", pa.float64()),
+            ("num_injured", pa.float64()),
             ("damage_cost", pa.float64()),
             ("avg_temperature_2m", pa.float64()),
             ("min_temperature_2m", pa.float64()),
@@ -78,7 +71,7 @@ class SummaryDataset:
         self.create_table()
 
     def create_table(self):
-        if os.path.exists(self.summary_dataset_filepath):
+        if os.path.exists(Config.summary_dataset_filepath):
             logging.info("Skipping Summary Parquet file creation.")
             return
         else:
@@ -87,26 +80,21 @@ class SummaryDataset:
         self.clear_dataset()
 
     def upload_data(self, start_date: datetime, end_date: datetime):
-        # 2, 5, 0
         # TODO: get more data by making the parameters more fine-grained
-        points = set(
-            self.point_generator.get_all_points()
-        )
+        points = self.point_generator.get_all_points()
         # points = [(-92.172935, 38.579201), (-89.172935, 38.579201), (-86.172935, 38.579201)]
 
-        # logging.info(f"Initial points: {points}")
         logging.info(f"Initial points len: {len(points)}")
 
         if Config.show_points:
             fig, ax = plt.subplots(figsize=(10, 8))
-            LandQueryService().gdf.geometry.plot(ax=ax, color='white', edgecolor='black', alpha=1.0, label="Dataset 1")
+            LandQueryModel().gdf.geometry.plot(ax=ax, color='white', edgecolor='black', alpha=1.0, label="Dataset 1")
             list_points = np.array(list(points))
             plt.scatter(x=list_points[:, 0], y=list_points[:, 1], c='red')
             plt.show()
 
-        points = self.fetch_nonexisting_set(points=points)
+        points = self.fetch_nonexisting_list(points=set(points))
 
-        # logging.info(f"New points: {points}")
         logging.info(f"New points len: {len(points)}")
 
         dates = pd.date_range(start=start_date, end=end_date, freq="D", inclusive="both") \
@@ -117,9 +105,9 @@ class SummaryDataset:
         thread_lock = Lock()
 
         # retrieve existing data so that we don't overwrite it
-        existing_summary_data = pq.read_table(self.summary_dataset_filepath)
+        existing_summary_data = pq.read_table(Config.summary_dataset_filepath)
 
-        parquet_writer = pq.ParquetWriter(where=self.summary_dataset_filepath, schema=self.schema)
+        parquet_writer = pq.ParquetWriter(where=Config.summary_dataset_filepath, schema=self.schema)
 
         parquet_writer.write_table(table=existing_summary_data)
 
@@ -150,9 +138,9 @@ class SummaryDataset:
                         "elevation": climate_df['elevation'],
                         "disastertype": disaster_data['disastertype'], 
                         "num_deaths": np.nan_to_num(x=disaster_data['total_deaths'].astype(dtype=np.float64), nan=0.0), # 100,000,000
-                        "num_injuries": np.nan_to_num(x=disaster_data['num_injuries'].astype(dtype=np.float64), nan=0.0), # 100,000,000
+                        "num_injured": np.nan_to_num(x=disaster_data['num_injured'].astype(dtype=np.float64), nan=0.0), # 100,000,000
                         "damage_cost": np.nan_to_num(x=disaster_data['damage_cost'].astype(dtype=np.float64), nan=0.0), # 1,000,000,000,000
-                        "avg_temperature_2m": climate_df['T2M'],
+                        "avg_temperature_2m": climate_df['T2M'], # TODO: maybe don't rename climate params
                         "min_temperature_2m": climate_df['T2M_MIN'],
                         "max_temperature_2m": climate_df['T2M_MAX'],
                         "dewfrostpoint_2m": climate_df['T2MDEW'],
@@ -196,7 +184,7 @@ class SummaryDataset:
 
         while num_tasks > 0:
             try:
-                time.sleep(30)
+                time.sleep(15)
             except (KeyboardInterrupt, SystemExit):
                 logging.info("Cancel initiated...")
 
@@ -216,9 +204,9 @@ class SummaryDataset:
         if parquet_writer.is_open:
             parquet_writer.close()
     
-    def fetch_nonexisting_set(self, points: Set):
+    def fetch_nonexisting_list(self, points: Set):
         pq_table = pd.read_parquet(
-            path=self.summary_dataset_filepath, 
+            path=Config.summary_dataset_filepath, 
             engine='pyarrow',
             columns=['longitude', 'latitude']
         ).drop_duplicates(keep='first')
@@ -227,12 +215,12 @@ class SummaryDataset:
 
         logging.info(f"Existing written points: {existing_points}")
 
-        return points.difference(existing_points)
+        return list(points.difference(existing_points))
     
     def clear_dataset(self):
         # Create an empty table
         empty_table = pa.Table.from_batches([], schema=self.schema)
 
         # Write empty Parquet file
-        pq.write_table(empty_table, self.summary_dataset_filepath)
+        pq.write_table(empty_table, Config.summary_dataset_filepath)
 

@@ -74,6 +74,7 @@ class NASAService:
         # dates = list(int(item) for item in parameter_data[parameter_names[0]].keys())
         dates = list(parameter_data[parameter_names[0]].keys())
 
+        # TODO: double check geometry
         coords = data.get('geometry', {}).get('coordinates') # [longitude, latitude, elevation]
 
         num_entries = len(dates)
@@ -99,37 +100,11 @@ class NASAService:
                     min_val=min_val,
                     max_val=max_val)
                 
-            df['longitude'] = (df['longitude'] + 180.0) / 360.0
-            df['latitude'] = (df['latitude'] + 90.0) / 180.0
+            df['longitude'] = (df['longitude'] + 180.0) / 360.0 # TODO: not needed
+            df['latitude'] = (df['latitude'] + 90.0) / 180.0 # TODO: not needed
             df['elevation'] = df['elevation'] / 8000.0
 
         return df
     
     def minmax_scaler(data, min_val, max_val): # TODO: put elsewhere
         return (data - min_val) / (max_val - min_val)
-    
-
-    
-
-
-
-# with open("weatherdata.csv", mode="w", newline="") as file:
-#     parameter_data = data.get("properties", {}).get("parameter", {})
-
-#     parameter_names = list(parameter_data.keys())
-#     dates = parameter_data[parameter_names[0]].keys()
-
-#     # elevation is the 3rd item and is in meters
-#     coords = data.get('geometry', {}).get('coordinates')
-
-#     writer = csv.writer(file)
-#     writer.writerow(
-#         flatten_list(['timestamp', 'latitude', 'longitude', 'elevation', parameter_names])
-#     ) # CSV header
-
-#     # Write the date, hour, and temperature to the CSV file
-#     for date in dates:
-#         parameter_list = flatten_list([int(date), coords])
-#         for parameter_name in parameter_names:
-#             parameter_list.append(parameter_data.get(parameter_name, {}).get(date, -1))
-#         writer.writerow(parameter_list)

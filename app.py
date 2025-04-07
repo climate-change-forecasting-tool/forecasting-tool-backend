@@ -31,7 +31,7 @@ Data processing
     d. elevation                    NASA POWER API
     e. disastertype                 EM-DAT / GDIS
     f. number of deaths             EM-DAT
-    g. number of injuries           EM-DAT
+    g. number of injured           EM-DAT
     h. property damage cost         EM-DAT
     i. ***weather data
         - temperature               NASA POWER API
