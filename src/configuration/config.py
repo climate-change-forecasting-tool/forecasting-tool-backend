@@ -8,7 +8,7 @@ class Config:
 
     disaster_gdb_filepath = "data/pend-gdis-1960-2018-disasterlocations-gdb/pend-gdis-1960-2018-disasterlocations.gdb"
     emdat_data_filepath = "data/emdat_disasterdata.xlsx"
-    landmass_filepath = "db/ne_10m_land"
+    landmass_filepath = "data/ne_10m_land"
     combined_disaster_data_filepath = "db/disasters.parquet"
     summary_dataset_filepath = "db/summary_data.parquet"
 

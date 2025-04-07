@@ -3,4 +3,4 @@ __pycache__/
 .env
 data/
 .venv/
-db/*.parquet
+db/
