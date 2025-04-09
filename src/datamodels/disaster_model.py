@@ -10,7 +10,6 @@ class DisasterModel:
         pass
 
     def get_table(self):
-        logging.info("Creating disaster db...")
         gdis_df = gpd.read_file( # TODO: evaluate each disaster's geometry mapped to explain why there is duplicate data & other stuff
             filename=Config.disaster_gdb_filepath, 
             columns=['disasterno', 'iso3', 'disastertype', 'geometry'],
@@ -37,6 +36,7 @@ class DisasterModel:
 
         # print(gdis_df)
 
+        # TODO: maybe include no. affected / total no. affected
         emdat_df = pd.read_excel(
             io=Config.emdat_data_filepath,
             usecols=['DisNo.', 'Start Year', 'Start Month', 'Start Day', 'End Year', 'End Month', 'End Day', 'Total Deaths', 'No. Injured', "Total Damage, Adjusted ('000 US$)"]

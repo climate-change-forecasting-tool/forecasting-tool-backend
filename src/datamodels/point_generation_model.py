@@ -1,8 +1,8 @@
-from datetime import datetime
 import os
-import geopandas as gpd
+from typing import List
 from shapely.geometry import Point, MultiPolygon, Polygon
-from shapely.ops import unary_union, triangulate
+from shapely.geometry.base import BaseGeometry
+from shapely.ops import triangulate
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
@@ -15,6 +15,8 @@ from src.utility import Timer
 
 from src.configuration.config import Config
 from .disaster_model import DisasterModel
+
+from src.datamodels import LandQueryModel
 
 logging.basicConfig(level=logging.INFO)
 
@@ -71,41 +73,26 @@ class PointGenerationModel:
         )
         h3_indexes = h3_indexes1 + h3_indexes2
 
-        logging.info(len(h3_indexes))
+        logging.info(f"Total hexagons: {len(h3_indexes)}")
 
         polygons = [Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(h)]) for h in h3_indexes]
 
+        # eliminate polygons that are hyperstretched
         polygons = [poly for poly in polygons if poly.area < 55]
 
+        logging.info(f"Hexagons of sufficient area: {len(polygons)}")
+
         if Config.show_hexagons:
-            from src.datamodels import LandQueryModel
-            from matplotlib.patches import Polygon as MplPolygon
-            from matplotlib.collections import PatchCollection
-            fig, ax = plt.subplots(figsize=(10, 8))
-            LandQueryModel().gdf.geometry.plot(ax=ax, color='white', edgecolor='black', alpha=1.0, label="Dataset 1")
-            patches = []
-            for geom in polygons:
-                if isinstance(geom, MultiPolygon):
-                    parts = geom.geoms
-                elif isinstance(geom, Polygon):
-                    parts = [geom]
-                else:
-                    raise TypeError(f"Expected Polygon or MultiPolygon, got {type(geom)}")
-
-                for part in parts:
-                    if not part.is_empty:
-                        exterior = list(part.exterior.coords)
-                        patch = MplPolygon(exterior, closed=True)
-                        patches.append(patch)
-
-            patch_collection = PatchCollection(patches, facecolor="red", edgecolor="black", alpha=0.2)
-            ax.add_collection(patch_collection)
-            plt.show()
+            LandQueryModel().show_geoms_on_world(polygons=polygons)
 
         disaster_model = DisasterModel()
 
         with Timer("Fetching disaster data") as t:
             gdf = disaster_model.get_table()
+        
+        if Config.show_disasters:
+            logging.info("Populating world map with disasters...")
+            LandQueryModel().show_geoms_on_world(polygons=gdf.geometry)
 
         logging.info("Making rtree")
         # Making rtree
@@ -116,7 +103,6 @@ class PointGenerationModel:
             gdf.set_index('id', inplace=True)
 
             for row in gdf.itertuples(index=True):
-                # logging.info(f"Processing geom {int(row.Index)}")
                 # Insert the bounding box of each geometry (geometry.bounds is a tuple of (minx, miny, maxx, maxy))
                 idx.insert(int(row.Index), row.geometry.bounds)
 
@@ -132,7 +118,7 @@ class PointGenerationModel:
                 return None
             
             intersections = []
-            for i, polygon in enumerate(polygons):
+            for polygon in polygons:
                 intersection = get_intersection(polygon)
                 if intersection:
                     intersections.append(intersection)
@@ -187,8 +173,6 @@ class PointGenerationModel:
         cumulative_areas = np.cumsum(areas)
         
         # Pick a triangle based on area weights
-        # TODO: set a seed
-
         r = np.random.uniform(0, cumulative_areas[-1])
         chosen_triangle = triangles[np.searchsorted(cumulative_areas, r)]
 
@@ -227,11 +211,22 @@ class PointGenerationModel:
 
         pq_table.drop(['longitude', 'latitude'], axis=1, inplace=True)
 
-        existing_dates = pd.to_datetime(pq_table['timestamp'])
-        missing_dates = set(dates) - set(existing_dates)
+        #### TODO: need to drop duplicates while keeping the most data; 
+        #### ex: look up rows 3587 and 3645 in emdat, they have same # deaths, but diff. no. affected
+
+        # temporary
+        pq_table.drop_duplicates(subset='timestamp', keep='first', inplace=True)
+
+        existing_dates = pq_table['timestamp']
+
+        # unique_elements, counts = np.unique(existing_dates, return_counts=True)
+        # print(unique_elements[counts > 1])
+        # print(pq_table[pq_table['timestamp'].isin(unique_elements[counts > 1])])
+
+        missing_dates = list(np.setdiff1d(pd.to_datetime(dates), existing_dates))
         
         nodisaster_table = pd.DataFrame({
-            "timestamp": sorted(missing_dates),
+            "timestamp": missing_dates,
             "disastertype": ["none"] * len(missing_dates),
             "total_deaths": [0] * len(missing_dates),
             "num_injured": [0] * len(missing_dates),
@@ -240,10 +235,8 @@ class PointGenerationModel:
 
         nodisaster_table['timestamp'] = pd.to_datetime(nodisaster_table['timestamp'])
 
-        # TODO: fix error here
+        # merge tables
         merged = pd.concat([pq_table, nodisaster_table], join="inner")
-
-        # merged = pd.merge(pq_table, nodisaster_table, on="timestamp", how="inner")
 
         merged.set_index('timestamp', inplace=True)
         merged.sort_index(inplace=True)

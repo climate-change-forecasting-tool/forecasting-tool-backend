@@ -21,13 +21,6 @@ logging.basicConfig(level=logging.INFO)
 from .services import NASAService, NOAAService
 from .configuration.config import Config
 
-SUMMARY_DATASET_FILEPATH = 'db/summary_data.parquet'
-
-"""
-1. Read (& block) if a point has been written to the parquet file
-2. 
-"""
-
 class SummaryDataset:
 
     def __init__(self):
@@ -97,6 +90,10 @@ class SummaryDataset:
 
         logging.info(f"New points len: {len(points)}")
 
+        if len(points) == 0:
+            logging.info("No points to process summary data for! Skipping data uploading for summary dataset!")
+            return
+
         dates = pd.date_range(start=start_date, end=end_date, freq="D", inclusive="both") \
             .strftime("%Y%m%d")
 
@@ -131,6 +128,8 @@ class SummaryDataset:
                     logging.info(f"(long={longitude}, lat={latitude}): Writing summary data to parquet file...")
                     # TODO: Use Dask standard scaling instead of normalization; once we have all the data, then apply standardization afterward
                     # TODO: scale longitude and latitude with unit normalization; scale everything else with standard scaling
+
+                    dict()
                     batch_data = pa.table({
                         "timestamp": climate_df['timestamp'],
                         "longitude": [longitude] * len(dates), # climate_df['longitude']
@@ -175,10 +174,6 @@ class SummaryDataset:
 
         executor = concurrent.futures.ThreadPoolExecutor(max_workers=Config.num_workers)
 
-        # 1 worker takes about 2:30-4:00 mins
-        # 2 workers take about 5:00 mins to do one job each
-        # 4 workers take about 8:30-10:00 mins to do one job each
-
         for (longitude, latitude) in points:
             executor.submit(single_upload, longitude, latitude)
 
@@ -197,7 +192,6 @@ class SummaryDataset:
                 logging.info("Stopped writing summary dataset.")
 
                 return
-
 
         logging.info("Finished writing summary dataset!")
 

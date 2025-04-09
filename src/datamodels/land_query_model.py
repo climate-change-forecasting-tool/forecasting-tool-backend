@@ -1,5 +1,9 @@
+from typing import List
 import geopandas as gpd
 from shapely.geometry import Point, MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
+from matplotlib.patches import Polygon as MplPolygon
+from matplotlib.collections import PatchCollection
 import matplotlib.pyplot as plt
 import logging
 from src.configuration.config import Config
@@ -48,3 +52,25 @@ class LandQueryModel:
     
     def is_on_land(self, longitude: float, latitude: float):
         return self.gdf.contains(Point(longitude, latitude))
+    
+    def show_geoms_on_world(self, polygons: List[BaseGeometry]):
+        fig, ax = plt.subplots(figsize=(10, 8))
+        self.gdf.geometry.plot(ax=ax, color='white', edgecolor='black', alpha=1.0, label="Dataset 1")
+        patches = []
+        for geom in polygons:
+            if isinstance(geom, MultiPolygon):
+                parts = geom.geoms
+            elif isinstance(geom, Polygon):
+                parts = [geom]
+            else:
+                raise TypeError(f"Expected Polygon or MultiPolygon, got {type(geom)}")
+
+            for part in parts:
+                if not part.is_empty:
+                    exterior = list(part.exterior.coords)
+                    patch = MplPolygon(exterior, closed=True)
+                    patches.append(patch)
+
+        patch_collection = PatchCollection(patches, facecolor="red", edgecolor="black", alpha=0.2)
+        ax.add_collection(patch_collection)
+        plt.show()

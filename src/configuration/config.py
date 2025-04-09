@@ -15,16 +15,17 @@ class Config:
     ### disaster database
 
     furthest_back_time = datetime(1981, 1, 1)
-    recreate_disaster_database = False
+
+    recreate_disaster_database = True
     hexagon_resolution = 2
     show_hexagons = True
-    show_disasters = False # TODO: implement
+    show_disasters = False # is very slow
 
     ### summary dataset
 
     generate_summary_dataset = True # main driver for summary dataset
 
-    recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
+    recreate_summary_dataset = True # if True, all data from summary dataset will be cleared before processing
     start_date = datetime(1981, 1, 1) # earliest is 1981
     end_date = datetime(1990, 1, 1) # latest is 2018
     show_points = True # shows all points on world map
