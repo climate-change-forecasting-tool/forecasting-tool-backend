@@ -80,7 +80,12 @@ class NASAService:
         num_entries = len(dates)
 
         column_names = flatten_list(['timestamp', 'longitude', 'latitude', 'elevation', parameter_names])
-        datalist = [dates, [coords[0]] * num_entries, [coords[1]] * num_entries, [coords[2]] * num_entries]
+        datalist = [
+            dates, 
+            [coords[0]] * num_entries, 
+            [coords[1]] * num_entries, 
+            [coords[2]] * num_entries
+        ]
         # assuming all parameters have the same dates
         for parameter in parameter_names:
             datalist.append(list(parameter_data.get(parameter, {}).values()))
@@ -98,11 +103,8 @@ class NASAService:
                 df[param] = NASAService.minmax_scaler(
                     data=df[param], 
                     min_val=min_val,
-                    max_val=max_val)
-                
-            df['longitude'] = (df['longitude'] + 180.0) / 360.0 # TODO: not needed
-            df['latitude'] = (df['latitude'] + 90.0) / 180.0 # TODO: not needed
-            df['elevation'] = df['elevation'] / 8000.0
+                    max_val=max_val
+                )
 
         return df
     

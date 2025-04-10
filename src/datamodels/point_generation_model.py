@@ -54,11 +54,11 @@ class PointGenerationModel:
                 logging.info("Clearing Disaster Parquet file and recreating now...")
                 self.clear_dataset()
             else:
-
                 logging.info("Skipping Disaster Parquet file creation.")
                 return
         else:
             logging.info("Disaster Parquet file does not exist. Creating now...")
+            self.clear_dataset()
 
         # Generate hexagon polygons across the world
         logging.info("Creating hexagons...")
@@ -218,10 +218,6 @@ class PointGenerationModel:
         pq_table.drop_duplicates(subset='timestamp', keep='first', inplace=True)
 
         existing_dates = pq_table['timestamp']
-
-        # unique_elements, counts = np.unique(existing_dates, return_counts=True)
-        # print(unique_elements[counts > 1])
-        # print(pq_table[pq_table['timestamp'].isin(unique_elements[counts > 1])])
 
         missing_dates = list(np.setdiff1d(pd.to_datetime(dates), existing_dates))
         

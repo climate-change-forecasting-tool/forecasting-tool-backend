@@ -75,7 +75,6 @@ class SummaryDataset:
     def upload_data(self, start_date: datetime, end_date: datetime):
         # TODO: get more data by making the parameters more fine-grained
         points = self.point_generator.get_all_points()
-        # points = [(-92.172935, 38.579201), (-89.172935, 38.579201), (-86.172935, 38.579201)]
 
         logging.info(f"Initial points len: {len(points)}")
 
@@ -136,9 +135,9 @@ class SummaryDataset:
                         "latitude": [latitude] * len(dates), # climate_df['latitude']
                         "elevation": climate_df['elevation'],
                         "disastertype": disaster_data['disastertype'], 
-                        "num_deaths": np.nan_to_num(x=disaster_data['total_deaths'].astype(dtype=np.float64), nan=0.0), # 100,000,000
-                        "num_injured": np.nan_to_num(x=disaster_data['num_injured'].astype(dtype=np.float64), nan=0.0), # 100,000,000
-                        "damage_cost": np.nan_to_num(x=disaster_data['damage_cost'].astype(dtype=np.float64), nan=0.0), # 1,000,000,000,000
+                        "num_deaths": np.nan_to_num(x=disaster_data['total_deaths'].astype(dtype=np.float64), nan=0.0),
+                        "num_injured": np.nan_to_num(x=disaster_data['num_injured'].astype(dtype=np.float64), nan=0.0),
+                        "damage_cost": np.nan_to_num(x=disaster_data['damage_cost'].astype(dtype=np.float64), nan=0.0),
                         "avg_temperature_2m": climate_df['T2M'], # TODO: maybe don't rename climate params
                         "min_temperature_2m": climate_df['T2M_MIN'],
                         "max_temperature_2m": climate_df['T2M_MAX'],
