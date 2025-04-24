@@ -31,6 +31,6 @@ if Config.generate_summary_dataset:
 if Config.activate_tft:
     from .model import TFTransformer
 
-    tft = TFTransformer(parquet_df='db/summary_data.parquet')
+    tft = TFTransformer(parquet_df=Config.summary_dataset_filepath)
 
 

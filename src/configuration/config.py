@@ -14,20 +14,26 @@ class Config:
 
     ### disaster database
 
-    furthest_back_time = datetime(1981, 1, 1)
+    furthest_back_time = datetime(1981, 1, 1) # DO NOT MODIFY!!!
 
     recreate_disaster_database = False
     hexagon_resolution = 2
     show_hexagons = True
     show_disasters = False # is very slow
 
+    ### google earth engine
+
+    project_name = "sivon-ee" # put project ID here
+    buffer_radius = 10000 # in meters
+
+
     ### summary dataset
 
     generate_summary_dataset = False # main driver for summary dataset
 
     recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
-    start_date = datetime(1981, 1, 1) # earliest is 1981
-    end_date = datetime(1990, 1, 1) # latest is 2018
+    start_date = datetime(2000, 1, 1) # earliest is 1981
+    end_date = datetime(2018, 1, 1) # latest is 2018
     show_points = True # shows all points on world map
     num_workers = 4 # number of workers used to make data for summary dataset
 
@@ -37,3 +43,9 @@ class Config:
     train_tft = True
     test_tft = False
     # TODO: perhaps put all model parameters here
+
+
+
+
+    #2000-2018= 3975 disasters
+    #1981-2000= 1804 disasters

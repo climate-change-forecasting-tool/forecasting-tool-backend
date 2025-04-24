@@ -3,7 +3,7 @@ from multiprocessing import freeze_support
 # latitude [-90, 90] and longitude [-180, 180)
 
 if __name__ == '__main__':
-    import src
+    import src.main as main
 
     freeze_support()
 
@@ -50,15 +50,8 @@ Data processing
 
 
 
-For processing data either:
-    - Quadtrees for disaster geometry centroids
-    - Keeping all disaster geometries in memory
-        - Query disaster dataset for dates 
-    
-- Use population data from CARTO
-
-Number of points for a given tile side length:
-    y = 0.3*(40000/x)^2
-    where x is distance in kilometers
+Climate parameters
+Mess around with hexagon resolution
+Get population data
 
 """

@@ -18,7 +18,7 @@ from src.datamodels import PointGenerationModel, LandQueryModel
 from src.utility import Timer
 logging.basicConfig(level=logging.INFO)
 
-from .services import NASAService, NOAAService
+from .services import NASAService#, GoogleEarthService
 from .configuration.config import Config
 
 class SummaryDataset:
@@ -27,11 +27,8 @@ class SummaryDataset:
 
         self.climate_serv = NASAService()
         self.point_generator = PointGenerationModel()
+        # self.google_earth_serv = GoogleEarthService()
 
-        # Define a schema with column names and data types
-        # if os.path.exists(self.summary_dataset_filepath):
-        #     self.schema = pq.read_table(self.summary_dataset_filepath).schema
-        # else:
         self.schema = pa.schema([
             ("timestamp", pa.uint64()), # 'YYYYMMDD' to 0 - x
             ("longitude", pa.float64()),
@@ -98,6 +95,8 @@ class SummaryDataset:
 
         logging.info(f"{len(points) * len(dates)} records to be added to the summary dataset")
 
+        # population_df = self.google_earth_serv.get_population_data(points=points)
+
         thread_lock = Lock()
 
         # retrieve existing data so that we don't overwrite it
@@ -122,13 +121,19 @@ class SummaryDataset:
                     # Adjust timestamp to start from 0 and have an increment of 1 between contiguous times
                     climate_df['timestamp'] = (pd.to_datetime(climate_df['timestamp'], format='%Y%m%d') - start_date).dt.days.astype(np.uint64)
 
+                    # logging.info(f"(long={longitude}, lat={latitude}): Gathering population data...")
+                    # specified_pop_data = GoogleEarthService.query_point_in_df(
+                    #     df=population_df, 
+                    #     longitude=longitude,
+                    #     latitude=latitude,
+                    #     columns=['population']
+                    # )
+
                     logging.info(f"(long={longitude}, lat={latitude}): Gathering disaster data...")
                     disaster_data = self.point_generator.get_data_for_point(longitude=longitude, latitude=latitude)
-                    logging.info(f"(long={longitude}, lat={latitude}): Writing summary data to parquet file...")
-                    # TODO: Use Dask standard scaling instead of normalization; once we have all the data, then apply standardization afterward
-                    # TODO: scale longitude and latitude with unit normalization; scale everything else with standard scaling
 
-                    dict()
+                    logging.info(f"(long={longitude}, lat={latitude}): Writing summary data to parquet file...")
+
                     batch_data = pa.table({
                         "timestamp": climate_df['timestamp'],
                         "longitude": [longitude] * len(dates), # climate_df['longitude']
@@ -156,6 +161,7 @@ class SummaryDataset:
                         "surface_pressure": climate_df['PS'],
                         "transpiration": climate_df['EVPTRNS'],
                         "evaporation": climate_df['EVLAND'],
+                        # "population": specified_pop_data,
                     })
                     with thread_lock:
                         if not parquet_writer.is_open:

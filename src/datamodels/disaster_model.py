@@ -72,4 +72,12 @@ class DisasterModel:
         combined_df['end_date'] = pd.to_datetime(combined_df['end_date'])
         combined_df = combined_df[combined_df['end_date'] >= Config.furthest_back_time]
 
+        # elim all prior to window
+        combined_df = combined_df[combined_df['end_date'] >= Config.start_date]
+
+        # elim all after window
+        combined_df = combined_df[combined_df['start_date'] <= Config.end_date]
+
+        logging.info(f"Using {len(combined_df)} disasters.")
+
         return combined_df
