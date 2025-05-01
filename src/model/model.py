@@ -1,6 +1,7 @@
+import pickle
 import pandas as pd
 import numpy as np
-from pytorch_forecasting import MAE, RMSE, Baseline, QuantileLoss
+from pytorch_forecasting import MAE, RMSE, Baseline, CrossEntropy, GroupNormalizer, MultiLoss, NaNLabelEncoder, QuantileLoss
 from sklearn.preprocessing import StandardScaler
 from pytorch_forecasting.data import TimeSeriesDataSet
 from pytorch_forecasting.models import TemporalFusionTransformer
@@ -8,13 +9,20 @@ import lightning.pytorch as pl
 import matplotlib.pyplot as plt
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
+import dask.dataframe as dd
+from pytorch_forecasting.data.encoders import TorchNormalizer, MultiNormalizer
+import torch
+from src.configuration.config import Config
 
 import logging
-
+import warnings
+warnings.filterwarnings("ignore") 
 logging.basicConfig(level=logging.INFO)
 
-class TFTransformer:
-    def __init__(self, datalist, column_names, train_split: float = 0.6, validation_split: float = 0.2):
+# https://github.com/sktime/pytorch-forecasting/issues/359
+
+class TFTransformer: # datalist, column_names, 
+    def __init__(self, parquet_df, train_split: float = 0.6, validation_split: float = 0.2):
         """
         dataset_filename: a csv file
             expected to have:
@@ -23,118 +31,261 @@ class TFTransformer:
             - longitude
         """
 
-        # Load your climate dataset (ensure it has a timestamp column)
-        self.df = pd.DataFrame(data=datalist, columns=column_names)
+        df = pd.read_parquet(path=parquet_df, engine="pyarrow")
+        
+        df['disastertype'] = df['disastertype'].astype('category')
+        df['timestamp'] = df['timestamp'].astype(int)
+        
+        scaler = StandardScaler()       # apply standard scaling 
+        df[['elevation', 'num_deaths', 'num_injured', 'damage_cost']] = scaler.fit_transform(df[['elevation', 'num_deaths', 'num_injured', 'damage_cost']])
+        
+        # make longitude and latitude learnable
 
-        # logging.info(df)
+        def latlon_to_xyz(lat, lon):
+            lat_rad = np.radians(lat)
+            lon_rad = np.radians(lon)
+            x = np.cos(lat_rad) * np.cos(lon_rad)
+            y = np.cos(lat_rad) * np.sin(lon_rad)
+            z = np.sin(lat_rad)
+            return x, y, z
+        df['x'], df['y'], df['z'] = latlon_to_xyz(df['latitude'], df['longitude'])
 
-        # Adjust timestamp to start from 0 and have an increment of 1 between contiguous times
-        self.df['timestamp'] = pd.to_datetime(self.df['timestamp'], format='%Y%m%d%H')
-        self.df['timestamp'] = ((self.df['timestamp'] - self.df['timestamp'].min()).dt.total_seconds() // 3600).astype(int)
+        # splitting by date
+        max_datapoints = df['timestamp'].max()
+        #data organization
+        row1 = df.iloc[0]
+        long1 = row1['longitude']
+        lat1 = row1['latitude']
+        #df = df[(df['longitude'] == long1) & (df['latitude'] == lat1)] oneline
+        df['group_id'] = df.groupby(['longitude', 'latitude']).ngroup()
+        df.sort_values(by = ['timestamp', 'group_id'])
+        df["disastertype"] = df["disastertype"].fillna('none')
+        df.drop(['longitude', 'latitude'], axis=1, inplace=True)
+        #training and validation set for model
+        train_end = int(train_split*max_datapoints)
+        val_end = train_end + int(validation_split*max_datapoints)
 
-        # Sort data for time-series processing
-        self.df = self.df.sort_values(['longitude', 'latitude', 'elevation', 'timestamp'])
-
-        logging.info(self.df)
-
-        # Normalize numerical features
-        scaler = StandardScaler()
-        self.df[['T2M', 'RH2M', 'WS2M', 'PRECTOTCORR']] = scaler.fit_transform(self.df[['T2M', 'RH2M', 'WS2M', 'PRECTOTCORR']])
-
-        logging.info(self.df)
+        self.train_df = df[df['timestamp'] < train_end]
+        self.val_df = df[(df['timestamp'] >= train_end) & (df['timestamp'] < val_end)]
+        self.test_df = df[df['timestamp'] >= val_end]
 
         # Define max prediction & history length
-        self.max_prediction_length = 24   # Forecast next 'x' hours
-        self.max_encoder_length = 48     # Use past 'x' hours for prediction
+        self.max_prediction_length = 14   # Forecast next 'x' days
+        self.max_encoder_length = 14     # Use past 'x' days for prediction
 
-        train_end = int(train_split*len(self.df))
-        val_end = train_end + int(validation_split*len(self.df))
-        
-        train_df = self.df[:train_end]
-        val_df = self.df[train_end:val_end]
-        test_df = self.df[val_end:]
+        # Can speed up in-memory operations of TimeSeriesDataSet with:
+        # https://pypi.org/project/numba/
 
-        train_dataset = TimeSeriesDataSet(
-            train_df,
-            time_idx='timestamp',
-            target='T2M',
-            group_ids=['longitude', 'latitude'],  # Group by location for multi-region modeling
-            min_encoder_length=self.max_encoder_length,
+        train_dataset = self.prepare_multi_target_dataset(
+            self.train_df,
             max_encoder_length=self.max_encoder_length,
             max_prediction_length=self.max_prediction_length,
-            static_reals=['longitude', 'latitude', 'elevation'],  # Static features
-            time_varying_known_reals=['timestamp', 'RH2M', 'WS2M', 'PRECTOTCORR'],  # Known variables
-            time_varying_unknown_reals=['T2M'],  # Variables to predict
-            # target_normalizer=GroupNormalizer(groups=['longitude', 'latitude', 'elevation']),  # Normalize per location
-            target_normalizer=None
+            predict_mode=True
         )
 
-        val_dataset = TimeSeriesDataSet.from_dataset(
-            train_dataset, pd.concat([train_df, val_df]), predict=True, stop_randomization=True
+        val_dataset = self.prepare_multi_target_dataset(
+            pd.concat([self.train_df, self.val_df]),
+            max_encoder_length=self.max_encoder_length,
+            max_prediction_length=self.max_prediction_length,
+            predict_mode=False
         )
 
-        batch_size = 64  # Adjust based on system memory
+        ##### TRAINING
+        if Config.train_tft:
+            self.train(
+                training_data=train_dataset,
+                validation_data=val_dataset,
+                hidden_size=32,
+                learning_rate=0.03,
+                batch_size=64,
+                max_epochs=50
+            )
 
-        self.train_loader = train_dataset.to_dataloader(train=True, batch_size=batch_size, num_workers=0)
-        self.val_loader = val_dataset.to_dataloader(train=False, batch_size=batch_size * 10, num_workers=0)
+        ###### hyperparameter tuning
+        # self.tune_hyperparameters()
+        ###### benchmark
+        # logging.info("Benchmark:")
+        # self.get_benchmark()
+        ##### PERFORMANCE EVALUATION
+        # self.eval_performance()
+
+    def prepare_multi_target_dataset(
+        self, 
+        data, 
+        max_encoder_length=24, 
+        max_prediction_length=12,
+        predict_mode=False
+    ):
+        # target_cols = ["num_deaths", "num_injured", "damage_cost", "disastertype"]
+        # Prepare the data for categorical encoding
+        categorical_encoder = NaNLabelEncoder(add_nan=True).fit(data["disastertype"])
+
+        # Create a MultiNormalizer for the targets
+        # Important: We need to fit it to our data before using it
+        target_normalizer = MultiNormalizer(
+            normalizers=[
+                GroupNormalizer(groups=['group_id']),  # num_deaths
+                GroupNormalizer(groups=['group_id']),  # num_injured
+                GroupNormalizer(groups=['group_id']),  # damage_cost
+                categorical_encoder,  # disastertype - no normalization for categorical variables
+            ]
+        )
+
+        categorical_encoders = {"disastertype": categorical_encoder}
+
+        tsds = TimeSeriesDataSet(
+            data,
+            time_idx='timestamp',
+            target=['num_deaths', 'num_injured', 'damage_cost', 'disastertype'], # maybe make disastertype one-hot real
+            group_ids=['group_id'],  # Group by location for multi-region modeling
+            min_encoder_length=max_encoder_length,
+            max_encoder_length=max_encoder_length,
+            max_prediction_length=max_prediction_length,
+            static_reals=['x','y','z', 'elevation'],  # Static features
+            time_varying_unknown_categoricals=['disastertype'],
+            time_varying_known_reals=['timestamp'], # season?
+            time_varying_unknown_reals=[
+                "num_deaths",
+                "num_injured",
+                "damage_cost",
+                "avg_temperature_2m",
+                "min_temperature_2m",
+                "max_temperature_2m",
+                "dewfrostpoint_2m",
+                "precipitation",
+                "avg_windspeed_2m",
+                "min_windspeed_2m",
+                "max_windspeed_2m",
+                "avg_windspeed_10m",
+                "min_windspeed_10m",
+                "max_windspeed_10m",
+                "avg_windspeed_50m",
+                "min_windspeed_50m",
+                "max_windspeed_50m",
+                "humidity_2m",
+                "surface_pressure",
+                "transpiration",
+                "evaporation"
+            ],
+            categorical_encoders=categorical_encoders,
+            target_normalizer = target_normalizer,
+            add_relative_time_idx=True,
+            add_target_scales=True,
+            add_encoder_length=True,
+            randomize_length=False,
+            predict_mode=predict_mode
+        )
+        return tsds
+
+    def train(
+    self,
+    training_data: TimeSeriesDataSet, 
+    validation_data: TimeSeriesDataSet = None, 
+    hidden_size=32, 
+    learning_rate=0.03, 
+    batch_size=32, 
+    max_epochs=50
+    ):
+        self.train_loader = training_data.to_dataloader(train=True, batch_size=batch_size, num_workers=4)
+        self.val_loader = validation_data.to_dataloader(train=False, batch_size=batch_size, num_workers=4)
 
         # Setup trainer
         early_stop_callback = EarlyStopping(
             monitor="val_loss", min_delta=1e-4, patience=10, verbose=False, mode="min"
         )
         lr_logger = LearningRateMonitor()  # log learning rate
-        logger = TensorBoardLogger("lightning_logs")
+        
+        # Add ModelCheckpoint callback to save the best model
+        from lightning.pytorch.callbacks import ModelCheckpoint
+        checkpoint_callback = ModelCheckpoint(
+            dirpath="checkpoints/",
+            filename="{epoch}-{val_loss:.2f}",
+            monitor="val_loss",
+            mode="min",
+            save_top_k=1,
+            verbose=True
+        )
+        
+        #logger = TensorBoardLogger("lightning_logs")
 
         self.trainer = pl.Trainer(
-            max_epochs=50,
-            accelerator="cpu",
+            max_epochs=max_epochs,
+            accelerator="auto",
             enable_model_summary=True,
             gradient_clip_val=0.1,
             limit_train_batches=50,  # comment in for training, running valiation every 30 batches
-            # fast_dev_run=True,
-            callbacks=[lr_logger, early_stop_callback],
-            logger=logger,
+            #fast_dev_run=True,
+            callbacks=[early_stop_callback, checkpoint_callback],  # Added checkpoint_callback here
+            #logger=logger,
         )
 
+        loss = MultiLoss([
+            QuantileLoss(),  # num_deaths
+            QuantileLoss(),  # num_injured
+            QuantileLoss(),  # damage_cost
+            CrossEntropy()   # disastertype
+        ])
+
         self.tft = TemporalFusionTransformer.from_dataset(
-            train_dataset,
-            learning_rate=0.01,
-            hidden_size=64,
+            training_data,
+            learning_rate=learning_rate,
+            hidden_size=hidden_size,
             attention_head_size=4,
             dropout=0.1,
             hidden_continuous_size=8,
-            loss=RMSE(), # QuantileLoss()
+            loss=loss,
             log_interval=10,  # uncomment for learning rate finder and otherwise, e.g. to 10 for logging every 10 batches
             optimizer="ranger",
             reduce_on_plateau_patience=4,
         )
         logging.info(f"Number of parameters in network: {self.tft.size() / 1e3:.1f}k")
 
+        self.trainer.fit(
+            self.tft,
+            train_dataloaders=self.train_loader,
+            val_dataloaders=self.val_loader,
+        )
+        with open("checkpoints/output_transformer.pkl", "wb") as f:
+            pickle.dump(self.tft.output_transformer, f)
 
-        ##### TRAINING
-        self.train()
-
-
-        ###### hyperparameter tuning
-        # self.tune_hyperparameters()
-
-        ###### benchmark
-        logging.info("Benchmark:")
-        self.get_benchmark()
-
-        ##### PERFORMANCE EVALUATION
-        self.eval_performance()
-
-    def load_best_model(self):
-        # load the best model according to the validation loss
-        best_model_path = self.trainer.checkpoint_callback.best_model_path
-        best_tft = TemporalFusionTransformer.load_from_checkpoint(best_model_path)
+    def load_best_model(self, checkpoint_path=None):
+        """
+        Load the best model from a checkpoint
+        Parameters:  checkpoint_path : str, optional
+            Path to a specific checkpoint file. If None, attempts to find the best checkpoint
+            from the trainer if training has occurred.
+        Returns: The loaded model
+        """
+        import os
+        checkpoint_path = "checkpoints/epoch=3-val_loss=0.06.ckpt"
+        # if checkpoint_path is None:
+        #     # Check if training has been performed
+        #     if not hasattr(self, 'trainer'):
+        #         raise ValueError("No trainer available. Either train the model first or provide a checkpoint_path.")
+            
+        #     # Find the checkpoint callback in the trainer's callbacks
+        #     checkpoint_callback = None
+        #     for callback in self.trainer.callbacks:
+        #         if hasattr(callback, 'best_model_path'):
+        #             checkpoint_callback = callback
+        #             break
+                    
+        #     if checkpoint_callback is None or not checkpoint_callback.best_model_path:
+        #         raise ValueError("No checkpoint found from training. Provide a specific checkpoint_path.")
+                
+        #     checkpoint_path = checkpoint_callback.best_model_path
+        
+        # Verify the checkpoint file exists
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        
+        # Load the model
+        best_tft = TemporalFusionTransformer.load_from_checkpoint(checkpoint_path)
         return best_tft
     
     def tune_hyperparameters(self):
         ###### hyperparameter tuning
         import pickle
-
         from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
 
         # create study
@@ -171,67 +322,157 @@ class TFTransformer:
         best_tft = self.load_best_model()
 
         # calculate mean absolute error on validation set
+        # predictions = best_tft.predict(
+        #     self.val_loader, return_y=True, trainer_kwargs=dict(accelerator="cpu")
+        # )
         predictions = best_tft.predict(
-            self.val_loader, return_y=True, trainer_kwargs=dict(accelerator="cpu")
+            self.test_loader, return_y=True, trainer_kwargs=dict(accelerator="cpu")
         )
         logging.info(MAE()(predictions.output, predictions.y)) # Mean average absolute error
 
-    def train(self):
-        self.trainer.fit(
-            self.tft,
-            train_dataloaders=self.train_loader,
-            val_dataloaders=self.val_loader,
-        )
-
-    def predict(self, location: tuple, timestamp):
+    def predict(self, location_data, prediction_length=14):
         """
-        location - a tuple containing (longitude, latitude)
-        """
+        Generate predictions for future time steps based on location data.
+        Parameters:
+        location_data : pd.DataFrame
+            DataFrame containing the most recent data for a specific location to use as context.
+            Must include the same features used during training.
+        prediction_length : int, optional
+            Number of time steps to predict into the future. If None, uses self.max_prediction_length.
 
+        Returns:dict : Dictionary containing:
+            - 'predictions': Raw prediction outputs with quantiles for numerical targets
+            - 'disaster_probabilities': Probabilities for each disaster type
+            - 'predicted_values': Point estimates for numerical targets (deaths, injuries, damage)
+        """
+        # Load the best model
         best_tft = self.load_best_model()
-
-        # select last 24 months from data (max_encoder_length is 24)
-        encoder_data = self.df[lambda x: x.timestamp > x.timestamp.max() - self.max_encoder_length]
-
-        # select last known data point and create decoder data from it
-        last_data = self.df[lambda x: x.timestamp == x.timestamp.max()]
-        decoder_data = pd.concat(
-            [
-                last_data.assign(date=lambda x: x.date + pd.offsets.MonthBegin(i))
-                for i in range(1, self.max_prediction_length + 1)
-            ],
-            ignore_index=True,
-        )
-
-        # add time index consistent with "data"
-        decoder_data["timestamp"] = (
-            decoder_data["date"].dt.year * 12 + decoder_data["date"].dt.month
-        )
-        decoder_data["timestamp"] += (
-            encoder_data["timestamp"].max() + 1 - decoder_data["timestamp"].min()
-        )
-
-        # combine encoder and decoder data
-        new_prediction_data = pd.concat([encoder_data, decoder_data], ignore_index=True)
-
-        new_raw_predictions = best_tft.predict(
-            new_prediction_data,
+        
+        if prediction_length is None:
+            prediction_length = self.max_prediction_length
+        
+        # Ensure we have enough history for encoder
+        if len(location_data) < self.max_encoder_length:
+            raise ValueError(f"Input data must contain at least {self.max_encoder_length} time steps for encoding")
+        
+        # Get the most recent data for encoding context
+        encoder_data = location_data.tail(self.max_encoder_length).copy()
+        
+        # Create future timestamps for prediction
+        last_timestamp = encoder_data['timestamp'].max()
+        future_timestamps = [last_timestamp + i + 1 for i in range(prediction_length)]
+        
+        # Create decoder data frame for prediction
+        decoder_data = pd.DataFrame({
+            'timestamp': future_timestamps,
+            'group_id': [encoder_data['group_id'].iloc[0]] * prediction_length,
+            'x': [encoder_data['x'].iloc[0]] * prediction_length,
+            'y': [encoder_data['y'].iloc[0]] * prediction_length,
+            'z': [encoder_data['z'].iloc[0]] * prediction_length,
+            'elevation': [encoder_data['elevation'].iloc[0]] * prediction_length
+        })
+        
+        # Add required weather variables with placeholder values
+        weather_cols = [
+            "avg_temperature_2m", "min_temperature_2m", "max_temperature_2m",
+            "dewfrostpoint_2m", "precipitation", "avg_windspeed_2m",
+            "min_windspeed_2m", "max_windspeed_2m", "avg_windspeed_10m",
+            "min_windspeed_10m", "max_windspeed_10m", "avg_windspeed_50m",
+            "min_windspeed_50m", "max_windspeed_50m", "humidity_2m",
+            "surface_pressure", "transpiration", "evaporation"
+        ]
+        
+        # Add target variables with placeholder NaN values
+        target_cols = ["num_deaths", "num_injured", "damage_cost", "disastertype"]
+        
+        for col in weather_cols + target_cols:
+            if col == "disastertype":
+                # Use the most common disaster type from the encoder data as placeholder
+                decoder_data[col] = encoder_data[col].mode()[0]
+            else:
+                decoder_data[col] = 0 # 0 for the rest of the values
+        
+        # Combine encoder and decoder data
+        prediction_data = pd.concat([encoder_data, decoder_data], ignore_index=True)
+        
+        # Generate predictions
+        raw_predictions = best_tft.predict(
+            prediction_data,
             mode="raw",
             return_x=True,
             trainer_kwargs=dict(accelerator="cpu"),
         )
+        print("raw_predictions")
+        print(raw_predictions)
+        # Process the results
+        result = {}
+        prediction_idx = slice(-prediction_length, None)    # For numerical targets, extract median predictions (0.5 quantile)
+        output_dict = raw_predictions.output.prediction     # Get the output dictionary from raw predictions
+        print(raw_predictions.output)
+        print("prediction index")
+        print(prediction_idx)
+        print("output_dict")
+        print(output_dict)
+        # Extract predictions for each target
+        deaths_pred = np.array(output_dict[0][prediction_idx])      # Deaths predictions with quantiles
+        injured_pred = np.array(output_dict[1][prediction_idx])     # Injured predictions with quantiles
+        damage_pred = np.array(output_dict[2][prediction_idx])      # Damage predictions with quantiles
+        disaster_probs = output_dict[3][prediction_idx, :].softmax(dim=-1)
+        print("disasterprobs")
+        print(disaster_probs)
 
-        # for idx in range(10):  # plot 10 examples
-        #     best_tft.plot_prediction(
-        #         new_raw_predictions.x,
-        #         new_raw_predictions.output,
-        #         idx=idx,
-        #         show_future_observed=False,
-        #     )
+        # Get category mapping for disaster types
+        if best_tft.output_transformer is None:
+            with open("checkpoints/output_transformer.pkl", "rb") as f:
+                best_tft.output_transformer = pickle.load(f)
+        #disaster_categories = best_tft.output_transformer.transformation["disastertype"].categories_    later fix it
+        disaster_categories = ['none','storm','flood','mass movement (dry)','extreme temperature ' ,'landslide']
+        # Results for API consumption
+        result["predictions"] = {
+            "timestamps": future_timestamps,
+            "deaths": {
+                "median": deaths_pred[0,:, 1],  # 0.5 quantile
+                "lower": deaths_pred[0,:, 0],   # Lower quantile
+                "upper": deaths_pred[0,:, 2]    # Upper quantile
+            },
+            "injured": {
+                "median": injured_pred[0,:, 1],
+                "lower": injured_pred[0,:, 0],
+                "upper": injured_pred[0,:, 2]
+            },
+            "damage_cost": {
+                "median": damage_pred[0,:, 1],
+                "lower": damage_pred[0,:, 0],
+                "upper": damage_pred[0,:, 2]
+            }
+        }
+        
+        # Add disaster type predictions
+        result["disaster_probabilities"] = {
+            disaster_categories[i]: disaster_probs[:, i].tolist() 
+            for i in range(len(disaster_categories))
+        }
+        predicted_disaster_types = []
+        
+        for i in range(len(future_timestamps)):
+            for idx, prob in enumerate(disaster_probs):
+                if isinstance(prob, np.ndarray):
+                    prob = prob[0]  # Get the first value if it's an array
+            if disaster_probs[0][i].size == 0:
+                predicted_category = 'unknown'  # or some fallback category
+            elif disaster_probs[0][i].shape[0] > 1:
+                predicted_category_idx = np.argmax(disaster_probs[0][i])  # Get index of max probability
+                if predicted_category_idx < len(disaster_categories):
+                    predicted_category = disaster_categories[predicted_category_idx]
+                    print("chosen")
+                else:
+                    predicted_category = 'unknown'  # Fallback if the index is out of range
+            else:
+                # If only one category is predicted, take it as the result
+                predicted_category = disaster_categories[0][0]  # or some default category
+            predicted_disaster_types.append(predicted_category)
 
-        # ##### variable importance
-        # interpretation = best_tft.interpret_output(raw_prediction.output, reduction="sum")
-        # best_tft.plot_interpretation(interpretation)
-
-        return new_raw_predictions
-
+        # Now, predicted_disaster_types will hold the correctly mapped categories
+        result["predicted_disaster_types"] = predicted_disaster_types
+        
+        return result
