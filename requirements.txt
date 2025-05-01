@@ -10,4 +10,4 @@ geopandas==1.0.1
 openpyxl==3.1.5
 pyarrow==19.0.0
 fastparquet==2024.11.0
-Flask
+Flask==3.0.3 

@@ -1,33 +1,11 @@
-# from multiprocessing import freeze_support
-from flask import Flask, request, jsonify
-# import pickle
-# import numpy as np
-# import pandas as pd
-# from src.configuration.config import Config
-# from src.services.nasa_power_service import NASAService
+from flask import Flask, jsonify
+from flask_cors import CORS
 
 app = Flask(__name__)
-# with open("checkpoints/output_transformer.pkl", "rb") as f:
-#     model = pickle.load(f)
+CORS(app)  # enable CORS
 
-# nasa_service = NASAService()
-
-@app.route("/", methods=["POST"])
+@app.route("/", methods=["GET"])
 def predict():
-    # prediction_length=Config.tft_prediction_length
-    try:
-        data = request.get_json()
-        if data.get("longitude"):
-            longitude = float(data.get("longtitude"))
-        else:
-            raise Exception("longitude is missing")
-        if data.get("latitude"):
-            latitude = float(data.get("latitude"))
-        else:
-            raise Exception("longitude is missing")
-    except Exception as e:
-        return jsonify({'ok': False, 'errors': e}), 400
-    
     return jsonify(
         {
             'none_probability': (1.0/21.0), 
@@ -41,7 +19,8 @@ def predict():
             'num_injured': 32, 
             'damage_cost': 33000
         }
-    ), 200
+    )
+
     
     # def latlon_to_xyz(lat, lon):
     #     lat_rad = np.radians(lat)
@@ -176,3 +155,6 @@ def predict():
     # result["predicted_disaster_types"] = predicted_disaster_types
     
     # return result
+
+if __name__ == "__main__":
+    app.run(debug=True)
