@@ -10,3 +10,13 @@ pytorch_optimizer==3.4.0
 optuna==4.2.0
 statsmodels==0.14.4
 optuna-integration==4.2.1
+geopandas==1.0.1
+openpyxl==3.1.5
+pyarrow==19.0.0
+dask==2025.2.0
+fastparquet==2024.11.0
+matplotlib==3.9.0
+python-dotenv==1.0.1
+h3==4.2.2
+rtree==1.4.0
+# earthengine-api==1.5.9
