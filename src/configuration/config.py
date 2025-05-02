@@ -1,6 +1,7 @@
 # TODO: perhaps use this class for quality of life
 
 from datetime import datetime
+from typing import Literal
 
 class Config:
 
@@ -11,6 +12,7 @@ class Config:
     landmass_filepath = "data/ne_10m_land"
     combined_disaster_data_filepath = "db/disasters.parquet"
     summary_dataset_filepath = "db/summary_data.parquet"
+    tft_checkpoint_path = "checkpoints/epoch=3-val_loss=0.06.ckpt"
 
     ### disaster database
 
@@ -18,31 +20,30 @@ class Config:
 
     recreate_disaster_database = False
     hexagon_resolution = 2
-    show_hexagons = True
+    show_hexagons = False
     show_disasters = False # is very slow
-
-    ### google earth engine
-
-    project_name = "sivon-ee" # put project ID here
-    buffer_radius = 10000 # in meters
-
 
     ### summary dataset
 
     generate_summary_dataset = False # main driver for summary dataset
 
     recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
-    start_date = datetime(2000, 1, 1) # earliest is 1981
-    end_date = datetime(2018, 1, 1) # latest is 2018
-    show_points = True # shows all points on world map
+    start_date = datetime(1981, 1, 4) # earliest is 1981; ENSURE IT IS A SUNDAY
+    end_date = datetime(2018, 12, 29) # latest is 2018; ENSURE IT IS A SATURDAY
+    show_points = False # shows all points on world map
     num_workers = 4 # number of workers used to make data for summary dataset
 
     ### ML model
 
-    activate_tft = True
-    train_tft = True
+    activate_tft = False
+    train_tft = False
+    resume_training = False
     test_tft = False
-    # TODO: perhaps put all model parameters here
+    tft_accelerator: Literal['cpu', 'gpu', 'auto'] = 'cpu' 
+    tft_validation_workers = 8 # max 8 if gpu is used; 0 if cpu
+    tft_training_workers = 4 # max 4 if gpu is used; 0 if cpu
+    tft_train_split = 0.6
+    tft_validation_split = 0.2
 
 
 

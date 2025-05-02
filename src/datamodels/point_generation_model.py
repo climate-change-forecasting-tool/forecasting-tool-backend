@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pandas as pd
 from rtree import index
-from src.utility import Timer
+from src.utility import Timer, get_nonunique_elements
 
 from src.configuration.config import Config
 from .disaster_model import DisasterModel
@@ -40,7 +40,12 @@ class PointGenerationModel:
             ("timestamp", pa.date64()),
             ("longitude", pa.float64()),
             ("latitude", pa.float64()),
-            ("disastertype", pa.string()),
+            ("has_landslide", pa.bool_()),
+            ("has_flood", pa.bool_()),
+            ("has_dry_mass_movement", pa.bool_()),
+            ("has_extreme_temperature", pa.bool_()),
+            ("has_storm", pa.bool_()),
+            ("has_drought", pa.bool_()),
             ("total_deaths", pa.int64()),
             ("num_injured", pa.int64()),
             ("damage_cost", pa.int64()),
@@ -146,16 +151,21 @@ class PointGenerationModel:
                 filtered_gdf = gdf.loc[get_intersection_ids(point)]
 
                 for row in filtered_gdf.itertuples():
-                    dates = pd.date_range(start=row.start_date, end=row.end_date, freq="D", inclusive="both")
+                    dates = pd.date_range(start=row.start_date, end=row.end_date, freq="W", inclusive="both")
 
                     entry = pa.table({
                         "timestamp": pa.array(dates, type=pa.date64()),
-                        "longitude": [point.x] * len(dates),
-                        "latitude": [point.y] * len(dates),
-                        "disastertype": [row.disastertype] * len(dates),
-                        "total_deaths": [row.total_deaths] * len(dates),
-                        "num_injured": [row.num_injured] * len(dates),
-                        "damage_cost": [row.damage_cost] * len(dates),
+                        "longitude": pa.array([point.x] * len(dates), type=pa.float64()),
+                        "latitude": pa.array([point.y] * len(dates), type=pa.float64()),
+                        "has_landslide": pa.array([row.disastertype == 'landslide'] * len(dates), type=pa.bool_()),
+                        "has_flood": pa.array([row.disastertype == 'flood'] * len(dates), type=pa.bool_()),
+                        "has_dry_mass_movement": pa.array([row.disastertype == 'mass movement (dry)'] * len(dates), type=pa.bool_()),
+                        "has_extreme_temperature": pa.array([row.disastertype == 'extreme temperature '] * len(dates), type=pa.bool_()),
+                        "has_storm": pa.array([row.disastertype == 'storm'] * len(dates), type=pa.bool_()),
+                        "has_drought": pa.array([row.disastertype == 'drought'] * len(dates), type=pa.bool_()),
+                        "total_deaths": pa.array([row.total_deaths] * len(dates), type=pa.int64()),
+                        "num_injured": pa.array([row.num_injured] * len(dates), type=pa.int64()),
+                        "damage_cost": pa.array([row.damage_cost] * len(dates), type=pa.int64()),
                     })
 
                     parquet_writer.write_table(table=entry)
@@ -196,7 +206,7 @@ class PointGenerationModel:
         return points
     
     def get_data_for_point(self, longitude: float, latitude: float):
-        pq_table = pd.read_parquet(
+        pq_table: pd.DataFrame = pd.read_parquet(
             path=Config.combined_disaster_data_filepath, 
             engine='pyarrow',
         )
@@ -205,7 +215,7 @@ class PointGenerationModel:
 
         pq_table = pq_table[(Config.start_date <= pq_table['timestamp']) & (pq_table['timestamp'] <= Config.end_date)]
 
-        dates = pd.date_range(start=Config.start_date, end=Config.end_date, freq="D", inclusive="both")
+        dates = pd.date_range(start=Config.start_date, end=Config.end_date, freq="W", inclusive="both")
 
         pq_table = pq_table[(pq_table['longitude'] == longitude) & (pq_table['latitude'] == latitude)]
 
@@ -215,7 +225,37 @@ class PointGenerationModel:
         #### ex: look up rows 3587 and 3645 in emdat, they have same # deaths, but diff. no. affected
 
         # temporary
-        pq_table.drop_duplicates(subset='timestamp', keep='first', inplace=True)
+        # pq_table.drop_duplicates(subset='timestamp', keep='first', inplace=True)
+        dup_timestamps = get_nonunique_elements(pq_table['timestamp'])
+
+        for dup_timestamp in dup_timestamps:
+            dup_entries = pq_table[pq_table['timestamp'] == dup_timestamp]
+
+            has_landslide = np.any(dup_entries['has_landslide'])
+            has_flood = np.any(dup_entries['has_flood'])
+            has_dry_mass_movement = np.any(dup_entries['has_dry_mass_movement'])
+            has_extreme_temperature = np.any(dup_entries['has_extreme_temperature'])
+            has_storm = np.any(dup_entries['has_storm'])
+            has_drought = np.any(dup_entries['has_drought'])
+            total_deaths = np.sum(dup_entries['total_deaths'])
+            num_injured = np.sum(dup_entries['num_injured'])
+            damage_cost = np.sum(dup_entries['damage_cost'])
+
+            # delete all records with a matching duplicate timestamp
+            pq_table = pq_table[pq_table['timestamp'] != dup_timestamp]
+
+            pq_table.loc[len(pq_table)] = [
+                dup_timestamp, 
+                has_landslide,
+                has_flood,
+                has_dry_mass_movement,
+                has_extreme_temperature,
+                has_storm,
+                has_drought,
+                total_deaths,
+                num_injured,
+                damage_cost
+            ]
 
         existing_dates = pq_table['timestamp']
 
@@ -223,7 +263,12 @@ class PointGenerationModel:
         
         nodisaster_table = pd.DataFrame({
             "timestamp": missing_dates,
-            "disastertype": ["none"] * len(missing_dates),
+            "has_landslide": pa.array([False] * len(missing_dates), type=pa.bool_()),
+            "has_flood": pa.array([False] * len(missing_dates), type=pa.bool_()),
+            "has_dry_mass_movement": pa.array([False] * len(missing_dates), type=pa.bool_()),
+            "has_extreme_temperature": pa.array([False] * len(missing_dates), type=pa.bool_()),
+            "has_storm": pa.array([False] * len(missing_dates), type=pa.bool_()),
+            "has_drought": pa.array([False] * len(missing_dates), type=pa.bool_()),
             "total_deaths": [0] * len(missing_dates),
             "num_injured": [0] * len(missing_dates),
             "damage_cost": [0] * len(missing_dates),
@@ -245,6 +290,16 @@ class PointGenerationModel:
 
         # Write empty Parquet file
         pq.write_table(empty_table, Config.combined_disaster_data_filepath)
+
+    def get_group_id(self, longitude: float, latitude: float) -> int:
+        group_id = h3.str_to_int(
+            h3.latlng_to_cell(
+                lat=latitude, 
+                lng=longitude, 
+                res=Config.hexagon_resolution
+            )
+        )
+        return group_id
 
 
 

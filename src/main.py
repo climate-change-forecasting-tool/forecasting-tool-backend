@@ -1,17 +1,14 @@
 import csv
 from datetime import datetime
 
-from .services import NOAAService, NASAService
+from .services import NASAService
 from .configuration.config import Config
-import os
-from dotenv import load_dotenv
 import logging
 
 from .dataset_summary import SummaryDataset
 
 logging.basicConfig(level=logging.INFO)
 
-load_dotenv('.env')
 """
 EM-DAT: disaster data
     - https://doc.emdat.be/docs/legal/terms-of-use/
@@ -31,6 +28,6 @@ if Config.generate_summary_dataset:
 if Config.activate_tft:
     from .model import TFTransformer
 
-    tft = TFTransformer(parquet_df=Config.summary_dataset_filepath)
+    tft = TFTransformer()
 
 

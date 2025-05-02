@@ -18,7 +18,7 @@ from src.datamodels import PointGenerationModel, LandQueryModel
 from src.utility import Timer
 logging.basicConfig(level=logging.INFO)
 
-from .services import NASAService#, GoogleEarthService
+from .services import NASAService
 from .configuration.config import Config
 
 class SummaryDataset:
@@ -29,20 +29,32 @@ class SummaryDataset:
         self.point_generator = PointGenerationModel()
         # self.google_earth_serv = GoogleEarthService()
 
+        # 'landslide', 'flood', 'mass movement (dry)', 'extreme temperature ', 'storm', 'drought'
+
         self.schema = pa.schema([
             ("timestamp", pa.uint64()), # 'YYYYMMDD' to 0 - x
+            ("group_id", pa.int64()),
             ("longitude", pa.float64()),
             ("latitude", pa.float64()),
             ("elevation", pa.float64()),
-            ("disastertype", pa.string()), 
+            ("has_landslide", pa.bool_()),
+            ("has_flood", pa.bool_()),
+            ("has_dry_mass_movement", pa.bool_()),
+            ("has_extreme_temperature", pa.bool_()),
+            ("has_storm", pa.bool_()),
+            ("has_drought", pa.bool_()),
             ("num_deaths", pa.float64()),
             ("num_injured", pa.float64()),
             ("damage_cost", pa.float64()),
             ("avg_temperature_2m", pa.float64()),
             ("min_temperature_2m", pa.float64()),
             ("max_temperature_2m", pa.float64()),
-            ("dewfrostpoint_2m", pa.float64()),
-            ("precipitation", pa.float64()),
+            ("avg_dewfrostpoint_2m", pa.float64()), # from 'dewfrostpoint_2m'
+            ("min_dewfrostpoint_2m", pa.float64()),
+            ("max_dewfrostpoint_2m", pa.float64()),
+            ("avg_precipitation", pa.float64()), # from 'precipitation'
+            ("min_precipitation", pa.float64()),
+            ("max_precipitation", pa.float64()),
             ("avg_windspeed_2m", pa.float64()), # only back to 1980/12/31
             ("min_windspeed_2m", pa.float64()),
             ("max_windspeed_2m", pa.float64()),
@@ -52,10 +64,18 @@ class SummaryDataset:
             ("avg_windspeed_50m", pa.float64()),
             ("min_windspeed_50m", pa.float64()),
             ("max_windspeed_50m", pa.float64()),
-            ("humidity_2m", pa.float64()),
-            ("surface_pressure", pa.float64()),
-            ("transpiration", pa.float64()),
-            ("evaporation", pa.float64()),
+            ("avg_humidity_2m", pa.float64()), # from 'humidity_2m'
+            ("min_humidity_2m", pa.float64()),
+            ("max_humidity_2m", pa.float64()),
+            ("avg_surface_pressure", pa.float64()), # from 'surface_pressure'
+            ("min_surface_pressure", pa.float64()),
+            ("max_surface_pressure", pa.float64()),
+            ("avg_transpiration", pa.float64()), # from 'transpiration'
+            ("min_transpiration", pa.float64()),
+            ("max_transpiration", pa.float64()),
+            ("avg_evaporation", pa.float64()), # from 'evaporation'
+            ("min_evaporation", pa.float64()),
+            ("max_evaporation", pa.float64()),
         ])
 
         self.create_table()
@@ -90,7 +110,7 @@ class SummaryDataset:
             logging.info("No points to process summary data for! Skipping data uploading for summary dataset!")
             return
 
-        dates = pd.date_range(start=start_date, end=end_date, freq="D", inclusive="both") \
+        dates = pd.date_range(start=start_date, end=end_date, freq="W", inclusive="both") \
             .strftime("%Y%m%d")
 
         logging.info(f"{len(points) * len(dates)} records to be added to the summary dataset")
@@ -112,56 +132,60 @@ class SummaryDataset:
             try:
                 logging.info(f"(long={longitude}, lat={latitude}): Processing...")
                 with Timer("Single upload") as t:
-
-                    climate_df = NASAService.json_to_dataframe( # takes like 4 seconds to do this
-                        data=self.climate_serv.climate_query(longitude, latitude, dates[0], dates[-1]),
-                        # normalize_params=True
-                    )
-
-                    # Adjust timestamp to start from 0 and have an increment of 1 between contiguous times
-                    climate_df['timestamp'] = (pd.to_datetime(climate_df['timestamp'], format='%Y%m%d') - start_date).dt.days.astype(np.uint64)
-
-                    # logging.info(f"(long={longitude}, lat={latitude}): Gathering population data...")
-                    # specified_pop_data = GoogleEarthService.query_point_in_df(
-                    #     df=population_df, 
-                    #     longitude=longitude,
-                    #     latitude=latitude,
-                    #     columns=['population']
-                    # )
+                    climate_df = self.climate_serv.get_weekly_norm_data(longitude, latitude, start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d"))
 
                     logging.info(f"(long={longitude}, lat={latitude}): Gathering disaster data...")
                     disaster_data = self.point_generator.get_data_for_point(longitude=longitude, latitude=latitude)
+
+                    group_id = self.point_generator.get_group_id(longitude=longitude, latitude=latitude)
 
                     logging.info(f"(long={longitude}, lat={latitude}): Writing summary data to parquet file...")
 
                     batch_data = pa.table({
                         "timestamp": climate_df['timestamp'],
-                        "longitude": [longitude] * len(dates), # climate_df['longitude']
-                        "latitude": [latitude] * len(dates), # climate_df['latitude']
+                        "group_id": [group_id] * len(dates),
+                        "longitude": [longitude] * len(dates),
+                        "latitude": [latitude] * len(dates),
                         "elevation": climate_df['elevation'],
-                        "disastertype": disaster_data['disastertype'], 
+                        "has_landslide": pa.array(disaster_data['has_landslide'], type=pa.bool_()),
+                        "has_flood": pa.array(disaster_data['has_flood'], type=pa.bool_()),
+                        "has_dry_mass_movement": pa.array(disaster_data['has_dry_mass_movement'], type=pa.bool_()),
+                        "has_extreme_temperature": pa.array(disaster_data['has_extreme_temperature'], type=pa.bool_()),
+                        "has_storm": pa.array(disaster_data['has_storm'], type=pa.bool_()),
+                        "has_drought": pa.array(disaster_data['has_drought'], type=pa.bool_()),
                         "num_deaths": np.nan_to_num(x=disaster_data['total_deaths'].astype(dtype=np.float64), nan=0.0),
                         "num_injured": np.nan_to_num(x=disaster_data['num_injured'].astype(dtype=np.float64), nan=0.0),
                         "damage_cost": np.nan_to_num(x=disaster_data['damage_cost'].astype(dtype=np.float64), nan=0.0),
-                        "avg_temperature_2m": climate_df['T2M'], # TODO: maybe don't rename climate params
-                        "min_temperature_2m": climate_df['T2M_MIN'],
-                        "max_temperature_2m": climate_df['T2M_MAX'],
-                        "dewfrostpoint_2m": climate_df['T2MDEW'],
-                        "precipitation": climate_df['PRECTOTCORR'],
-                        "avg_windspeed_2m": climate_df['WS2M'], # only back to 1980/12/31
-                        "min_windspeed_2m": climate_df['WS2M_MIN'],
-                        "max_windspeed_2m": climate_df['WS2M_MAX'],
-                        "avg_windspeed_10m": climate_df['WS10M'],
-                        "min_windspeed_10m": climate_df['WS10M_MIN'],
-                        "max_windspeed_10m": climate_df['WS10M_MAX'],
-                        "avg_windspeed_50m": climate_df['WS50M'],
-                        "min_windspeed_50m": climate_df['WS50M_MIN'],
-                        "max_windspeed_50m": climate_df['WS50M_MAX'],
-                        "humidity_2m": climate_df['RH2M'],
-                        "surface_pressure": climate_df['PS'],
-                        "transpiration": climate_df['EVPTRNS'],
-                        "evaporation": climate_df['EVLAND'],
-                        # "population": specified_pop_data,
+                        "avg_temperature_2m": climate_df["avg_temperature_2m"],
+                        "min_temperature_2m": climate_df["min_temperature_2m"],
+                        "max_temperature_2m": climate_df["max_temperature_2m"],
+                        "avg_dewfrostpoint_2m": climate_df["avg_dewfrostpoint_2m"],
+                        "min_dewfrostpoint_2m": climate_df["min_dewfrostpoint_2m"],
+                        "max_dewfrostpoint_2m": climate_df["max_dewfrostpoint_2m"],
+                        "avg_precipitation": climate_df["avg_precipitation"],
+                        "min_precipitation": climate_df["min_precipitation"],
+                        "max_precipitation": climate_df["max_precipitation"],
+                        "avg_windspeed_2m": climate_df["avg_windspeed_2m"],
+                        "min_windspeed_2m": climate_df["min_windspeed_2m"],
+                        "max_windspeed_2m": climate_df["max_windspeed_2m"],
+                        "avg_windspeed_10m": climate_df["avg_windspeed_10m"],
+                        "min_windspeed_10m": climate_df["min_windspeed_10m"],
+                        "max_windspeed_10m": climate_df["max_windspeed_10m"],
+                        "avg_windspeed_50m": climate_df["avg_windspeed_50m"],
+                        "min_windspeed_50m": climate_df["min_windspeed_50m"],
+                        "max_windspeed_50m": climate_df["max_windspeed_50m"],
+                        "avg_humidity_2m": climate_df["avg_humidity_2m"],
+                        "min_humidity_2m": climate_df["min_humidity_2m"],
+                        "max_humidity_2m": climate_df["max_humidity_2m"],
+                        "avg_surface_pressure": climate_df["avg_surface_pressure"],
+                        "min_surface_pressure": climate_df["min_surface_pressure"],
+                        "max_surface_pressure": climate_df["max_surface_pressure"],
+                        "avg_transpiration": climate_df["avg_transpiration"],
+                        "min_transpiration": climate_df["min_transpiration"],
+                        "max_transpiration": climate_df["max_transpiration"],
+                        "avg_evaporation": climate_df["avg_evaporation"],
+                        "min_evaporation": climate_df["min_evaporation"],
+                        "max_evaporation": climate_df["max_evaporation"],
                     })
                     with thread_lock:
                         if not parquet_writer.is_open:
