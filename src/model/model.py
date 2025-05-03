@@ -2,17 +2,14 @@ import pickle
 import h3
 import pandas as pd
 import numpy as np
-from pytorch_forecasting import MAE, RMSE, Baseline, CrossEntropy, GroupNormalizer, MultiLoss, NaNLabelEncoder, QuantileLoss
+from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet, RMSE, Baseline, GroupNormalizer, MultiLoss
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
-from pytorch_forecasting.data import TimeSeriesDataSet
-from pytorch_forecasting.models import TemporalFusionTransformer
 import lightning.pytorch as pl
 import matplotlib.pyplot as plt
 from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor
-from lightning.pytorch.loggers import TensorBoardLogger
-import dask.dataframe as dd
-from pytorch_forecasting.data.encoders import TorchNormalizer, MultiNormalizer
+# from lightning.pytorch.loggers import TensorBoardLogger
+from pytorch_forecasting.data.encoders import MultiNormalizer, TorchNormalizer
 import torch
 from src.configuration.config import Config
 
@@ -59,7 +56,7 @@ class TFTransformer: # datalist, column_names,
 
         for target in self.binary_targets:
             self.loss_metrics.update({
-                target: nn.BCELoss()
+                target: nn.BCEWithLogitsLoss()
             })
             self.normalizers.update({
                 target: GroupNormalizer(
@@ -119,8 +116,9 @@ class TFTransformer: # datalist, column_names,
         # lat1 = row1['latitude']
         #df = df[(df['longitude'] == long1) & (df['latitude'] == lat1)] oneline
         
-        df.sort_values(by = ['timestamp', 'group_id'])
         df.drop(['longitude', 'latitude'], axis=1, inplace=True)
+
+        df.sort_values("timestamp").groupby("group_id")
 
         #training and validation set for model
         max_datapoints = df['timestamp'].max()
@@ -182,7 +180,7 @@ class TFTransformer: # datalist, column_names,
         # Create a MultiNormalizer for the targets
         target_normalizer = MultiNormalizer(
             # Order of dict.values() is preserved
-            normalizers=self.normalizers.values()
+            normalizers=list(self.normalizers.values())
         )
 
         tsds = TimeSeriesDataSet(
@@ -201,7 +199,8 @@ class TFTransformer: # datalist, column_names,
             add_target_scales=True,
             add_encoder_length=True,
             randomize_length=False,
-            predict_mode=predict_mode
+            predict_mode=predict_mode,
+            allow_missing_timesteps=True, # Evaluate
         )
         return tsds
 
@@ -221,7 +220,7 @@ class TFTransformer: # datalist, column_names,
         early_stop_callback = EarlyStopping(
             monitor="val_loss", min_delta=1e-4, patience=10, verbose=False, mode="min"
         )
-        lr_logger = LearningRateMonitor()  # log learning rate
+        # lr_logger = LearningRateMonitor()  # log learning rate
         
         # Add ModelCheckpoint callback to save the best model
         from lightning.pytorch.callbacks import ModelCheckpoint
@@ -249,7 +248,7 @@ class TFTransformer: # datalist, column_names,
 
         loss = MultiLoss(
             # Order of dict.values() is preserved
-            metrics=self.loss_metrics.values()
+            metrics=list(self.loss_metrics.values())
         )
 
         self.tft = TemporalFusionTransformer.from_dataset(
@@ -358,6 +357,7 @@ class TFTransformer: # datalist, column_names,
         )
         logging.info(RMSE()(predictions.output, predictions.y))
 
+    # TODO: test and fix
     def predict(self, location_data: pd.DataFrame, prediction_length: int = None):
         """
         Generate predictions for future time steps based on location data.
@@ -402,7 +402,7 @@ class TFTransformer: # datalist, column_names,
             normalized_pred = raw_predictions[target].prediction.detach().cpu().numpy()
             
             # Get the normalizer for this target
-            normalizer = self.normalizers[target]
+            normalizer: GroupNormalizer = self.normalizers[target]
             
             # Extract scale and offset from x (these are added by add_target_scales=True)
             scale = x["target_scale"][..., location_tsds.target_names.index(target)]
@@ -432,7 +432,7 @@ class TFTransformer: # datalist, column_names,
 
         
         
-    
+    # TODO: not working yet
     def predict_and_digest(self, longitude: float, latitude: float):
         group_id = h3.str_to_int(
             h3.latlng_to_cell(

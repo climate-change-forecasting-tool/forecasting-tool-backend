@@ -29,5 +29,3 @@ if Config.activate_tft:
     from .model import TFTransformer
 
     tft = TFTransformer()
-
-

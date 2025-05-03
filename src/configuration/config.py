@@ -35,13 +35,13 @@ class Config:
 
     ### ML model
 
-    activate_tft = False
-    train_tft = False
+    activate_tft = True
+    train_tft = True
     resume_training = False
     test_tft = False
-    tft_accelerator: Literal['cpu', 'gpu', 'auto'] = 'cpu' 
-    tft_validation_workers = 8 # max 8 if gpu is used; 0 if cpu
-    tft_training_workers = 4 # max 4 if gpu is used; 0 if cpu
+    tft_accelerator: Literal['cpu', 'gpu', 'tpu', 'auto'] = 'cpu' 
+    tft_validation_workers = 0 # max 8 if gpu is used; 0 if cpu
+    tft_training_workers = 0 # max 4 if gpu is used; 0 if cpu
     tft_train_split = 0.6
     tft_validation_split = 0.2
 
