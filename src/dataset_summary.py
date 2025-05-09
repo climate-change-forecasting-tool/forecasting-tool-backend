@@ -132,7 +132,7 @@ class SummaryDataset:
             try:
                 logging.info(f"(long={longitude}, lat={latitude}): Processing...")
                 with Timer("Single upload") as t:
-                    climate_df = self.climate_serv.get_weekly_norm_data(longitude, latitude, start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d"))
+                    climate_df = self.climate_serv.get_weekly_point_norm_data(longitude, latitude, start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d"))
 
                     logging.info(f"(long={longitude}, lat={latitude}): Gathering disaster data...")
                     disaster_data = self.point_generator.get_data_for_point(longitude=longitude, latitude=latitude)

@@ -3,6 +3,7 @@ from typing import List
 from shapely.geometry import Point, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import triangulate
+from shapely import make_valid
 import numpy as np
 import matplotlib.pyplot as plt
 import logging
@@ -62,30 +63,17 @@ class PointGenerationModel:
                 logging.info("Skipping Disaster Parquet file creation.")
                 return
         else:
-            logging.info("Disaster Parquet file does not exist. Creating now...")
-            self.clear_dataset()
+            if os.path.exists(Config.summary_dataset_filepath) and not Config.recreate_disaster_database:
+                logging.info("Skipping Disaster Parquet file creation.")
+                return
+            else:
+                logging.info("Disaster Parquet file does not exist. Creating now...")
+                self.clear_dataset()
 
         # Generate hexagon polygons across the world
         logging.info("Creating hexagons...")
 
-        h3_indexes1 = h3.polygon_to_cells(
-            h3shape=h3.LatLngPoly([(90, -180), (90, 0), (-90, 0), (-90, -180)]),
-            res=self.resolution
-        )
-        h3_indexes2 = h3.polygon_to_cells(
-            h3shape=h3.LatLngPoly([(90, 0), (90, 180), (-90, 180), (-90, 0)]),
-            res=self.resolution
-        )
-        h3_indexes = h3_indexes1 + h3_indexes2
-
-        logging.info(f"Total hexagons: {len(h3_indexes)}")
-
-        polygons = [Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(h)]) for h in h3_indexes]
-
-        # eliminate polygons that are hyperstretched
-        polygons = [poly for poly in polygons if poly.area < 55]
-
-        logging.info(f"Hexagons of sufficient area: {len(polygons)}")
+        polygons = self.generate_world_polygons()
 
         if Config.show_hexagons:
             LandQueryModel().show_geoms_on_world(polygons=polygons)
@@ -173,6 +161,18 @@ class PointGenerationModel:
         parquet_writer.close()
 
         logging.info("Disaster point generation process complete")
+    
+    def generate_world_polygons(self):
+        h3_indexes = []
+
+        for h3_index in h3.get_res0_cells():
+            h3_indexes.extend(h3.cell_to_children(h=h3_index, res=self.resolution))
+
+        logging.info(f"Total hexagons: {len(h3_indexes)}")
+
+        polygons = [make_valid(Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(h)])) for h in h3_indexes]
+
+        return polygons
 
     def random_point_in_polygon(self, polygon: Polygon) -> Point:
         # Triangulate the polygon

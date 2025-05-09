@@ -1,4 +1,3 @@
-# TODO: perhaps use this class for quality of life
 
 from datetime import datetime
 from typing import Literal
@@ -36,17 +35,12 @@ class Config:
     ### ML model
 
     activate_tft = True
-    train_tft = True
-    resume_training = False
-    test_tft = False
+    benchmark_tft = False
+    tune_hyperparams_tft = False
+    train_tft = False
+    test_tft = True
     tft_accelerator: Literal['cpu', 'gpu', 'tpu', 'auto'] = 'cpu' 
     tft_validation_workers = 0 # max 8 if gpu is used; 0 if cpu
     tft_training_workers = 0 # max 4 if gpu is used; 0 if cpu
     tft_train_split = 0.6
     tft_validation_split = 0.2
-
-
-
-
-    #2000-2018= 3975 disasters
-    #1981-2000= 1804 disasters

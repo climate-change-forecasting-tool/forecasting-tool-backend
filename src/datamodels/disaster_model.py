@@ -22,9 +22,7 @@ class DisasterModel:
         gdis_df.drop(gdis_df[gdis_df['disastertype'].isin(['volcanic activity', 'earthquake'])].index, inplace=True)
 
         # filter out entries that have null iso3's
-        gdis_df = gdis_df.loc[gdis_df['iso3'].notnull()] # TODO: this might need to be fixed
-
-        # TODO: store each geometry's centroid as a longitude and latitude for faster distance calculations?
+        gdis_df = gdis_df.loc[gdis_df['iso3'].notnull()]
 
         # add iso3 to disasterno to get the corresponding EM-DAT disaster number
         gdis_df['disasterno_iso3'] = gdis_df['disasterno'] + '-' + gdis_df['iso3']

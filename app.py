@@ -7,7 +7,8 @@ if __name__ == '__main__':
 
     freeze_support()
 
-
+# TODO: for model, include has_disaster and season
+# TODO: for point generation/data summary, use all disasters within the hexagon, not a point
 
 """
 

@@ -5,3 +5,6 @@ data/
 .venv/
 db/*
 db/*.parquet
+checkpoints
+lightning_logs
+optuna_test
