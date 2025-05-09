@@ -9,7 +9,7 @@ import lightning.pytorch as pl
 import matplotlib.pyplot as plt
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
-from pytorch_forecasting.data.encoders import MultiNormalizer, TorchNormalizer
+from pytorch_forecasting.data.encoders import MultiNormalizer
 import torch
 from src.configuration.config import Config
 import os
@@ -18,6 +18,8 @@ import logging
 import warnings
 warnings.filterwarnings("ignore") 
 logging.basicConfig(level=logging.INFO)
+import optuna
+optuna.logging.set_verbosity(verbosity=optuna.logging.INFO)
 
 from src.utility import latlon_to_xyz
 
@@ -34,7 +36,7 @@ class TFTransformer:
             verbose=True
         )
 
-        self.continuous_targets = ['num_deaths', 'num_injured', 'damage_cost']
+        self.continuous_targets = ['num_deaths', 'num_injured']#, 'damage_cost']
         self.binary_targets = ['has_landslide', 'has_flood', 'has_dry_mass_movement', 'has_extreme_temperature', 'has_storm', 'has_drought']
         # self.all_targets = self.continuous_targets + self.binary_targets
         
@@ -44,14 +46,12 @@ class TFTransformer:
 
         for target in self.continuous_targets:
             self.loss_metrics.update({
-                target: QuantileLoss(
-                    quantiles=[0.1, 0.5, 0.9]
-                )
+                target: QuantileLoss()
             })
             self.normalizers.update({
                 target: GroupNormalizer(
                     groups=['group_id'],
-                    transformation="log1p",
+                    transformation="softplus",
                     center=False,
                     scale_by_group=True
                 )
@@ -164,11 +164,11 @@ class TFTransformer:
             self.train(
                 training_dataframe=self.train_df,
                 validation_dataframe=self.val_df,
-                hidden_size=64, # 32
+                hidden_size=32, # 32
                 learning_rate=0.03,
                 batch_size=128,
                 max_epochs=1000,
-                patience=50
+                patience=25
             )
 
         if Config.test_tft:
@@ -314,10 +314,25 @@ class TFTransformer:
             raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
         
         logging.info(f"Using best model from: {checkpoint_path}")
+
+        device = None
+        if Config.tft_accelerator == 'cpu':
+            device = torch.device('cpu')
+
+            checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
+        elif Config.tft_accelerator == 'gpu':
+            device = torch.device('cuda:0') # fix if using gpu; you need to map to all gpus probably
+        else:
+            raise Exception("Accelerator device error")
         
+        logging.info(f"Loading checkpoint tft onto: {device.type}")
+
         # Load the model
-        best_tft = TemporalFusionTransformer.load_from_checkpoint(checkpoint_path)
+        best_tft = TemporalFusionTransformer.load_from_checkpoint(checkpoint_path, map_location=torch.device("cpu") if not torch.cuda.is_available() else None)
         
+        if Config.tft_accelerator == 'cpu':
+            best_tft.eval()
+
         return best_tft
     
     def tune_hyperparameters(
@@ -362,7 +377,7 @@ class TFTransformer:
             attention_head_size_range=(1, 4),
             learning_rate_range=(0.001, 0.1),
             dropout_range=(0.1, 0.3),
-            trainer_kwargs=dict(limit_train_batches=30),
+            trainer_kwargs=dict(limit_train_batches=30, enable_progress_bar=True),
             reduce_on_plateau_patience=4,
             use_learning_rate_finder=False,  # Optuna for analyzing ideal learning rate or use in-built learning rate finder
             verbose=True
@@ -474,53 +489,45 @@ class TFTransformer:
         
         raw_predictions = best_tft.predict(
             dataloader, # or tsds
-            mode="raw", # prediction
+            mode="raw",
             return_x=True, 
             trainer_kwargs=dict(accelerator=Config.tft_accelerator)
         )
-        logging.info("Raw predictions:")
-        logging.info(raw_predictions)
 
-        output = raw_predictions.output
-        # logging.info("Raw output:")
-        # logging.info(raw_output)
+        raw_output = raw_predictions.output.prediction
+        logging.info("Normalized output:")
+        logging.info(raw_output)
+
         x = raw_predictions.x
-        # logging.info("x:")
-        # logging.info(x)
-
-        # predictions = output
-
-        # predictions = best_tft.predict(
-        #     data=location_tsds, 
-        #     mode="prediction",
-        #     trainer_kwargs=dict(accelerator=Config.tft_accelerator)
-        # )
 
         predictions = {}
     
         # Extract and denormalize continuous targets
         for idx, target in enumerate(self.continuous_targets):
-            normalized_pred = np.array(output.prediction[idx])
+            normalized_pred = np.array(raw_output[idx].cpu())
             
             # Get the normalizer for this target
             normalizer: GroupNormalizer = self.normalizers[target]
             
             # Extract scale and offset from x (these are added by add_target_scales=True)
-            logging.info("Target scale")
-            logging.info(x['target_scale'])
+            target_scale = np.array(x["target_scale"][idx].cpu()).flatten()
 
-            scale = x["target_scale"][..., tsds.target_names.index(target)]
-            offset = x["target_scale"][..., len(tsds.target_names) + tsds.target_names.index(target)]
+            scale = target_scale[1]
+            offset = target_scale[0]
             
             # Denormalize
-            if normalizer.transformation == "log1p":
-                # For log1p transformation: first apply scale and offset, then expm1
-                denormalized_pred = np.expm1(normalized_pred * scale + offset)
+            if normalizer.transformation == "softplus":
+                denormalized_pred = np.log(normalized_pred * scale + offset)
             else:
+                raise Exception("Implementation required")
                 # For other transformations
-                denormalized_pred = normalized_pred * scale + offset
-                
-            predictions[target] = denormalized_pred
+                # denormalized_pred = normalized_pred * scale + offset
+
+            denormalized_pred = denormalized_pred[0]
+            
+            predictions[target + '_lower'] = denormalized_pred[:, 0]
+            predictions[target + '_median'] = denormalized_pred[:, 1]
+            predictions[target + '_upper'] = denormalized_pred[:, 2]
         
         # # Extract binary targets (probabilities)
         # for target in self.binary_targets:
@@ -530,9 +537,9 @@ class TFTransformer:
         #     # Also add binary predictions (0/1) using 0.5 threshold
         #     predictions[f"{target}_binary"] = (prob > 0.5).astype(int)
 
-        # predictions_df = pd.DataFrame(predictions)
+        predictions_df = pd.DataFrame(predictions)
         
-        return predictions
+        return predictions_df
         
     def predict_test(self):
         counts = self.train_df[self.train_df["has_disaster"] == 1.0].groupby("group_id").size()
@@ -584,6 +591,7 @@ class TFTransformer:
         return prediction_df
 
     def remove_and_check_duplicates(self, df):
+        print("Removing and checking for duplicates...")
         def get_duplicates(data):
             points = set([(long, lat) for long, lat in zip(data['longitude'], data['latitude'])])
             id_amounts = dict()
