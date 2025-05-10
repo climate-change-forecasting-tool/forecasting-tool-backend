@@ -16,9 +16,9 @@ from src.configuration.config import Config
 import os
 
 import logging
+logging.basicConfig(level=logging.INFO)
 import warnings
 warnings.filterwarnings("ignore") 
-logging.basicConfig(level=logging.INFO)
 import optuna
 optuna.logging.set_verbosity(verbosity=optuna.logging.INFO)
 
@@ -45,17 +45,19 @@ class TFTransformer:
 
         for target in self.continuous_targets:
             self.loss_metrics.update({
-                target: QuantileLoss()
+                target: QuantileLoss(
+                    quantiles=[0.1, 0.5, 0.9]
+                )
             })
             self.normalizers.update({
                 target: GroupNormalizer(
                     groups=['group_id'],
-                    # transformation="standard"
+                    method="standard"
                 )
             })
 
         self.unknown_climate_reals: List[str] = []
-        for climate_var_name in flatten_list(Config.cams_files_and_vars.values()):
+        for climate_var_name in list(Config.climate_data_param_names.keys()):
             for modifier in ['min', 'mean', 'max']:
                 self.unknown_climate_reals.append(climate_var_name + '_' + modifier)
 
@@ -64,14 +66,6 @@ class TFTransformer:
         df['timestamp'] = df['timestamp'].astype(int)
 
         logging.info(df)
-
-        # removes any duplicates
-        df = self.remove_and_check_duplicates(df)
-
-        # # data analysis
-        # for continuous_target in self.continuous_targets:
-        #     group_stats = df.groupby("group_id")[continuous_target].agg(["min", "max", "std", "count"])
-        #     logging.info(group_stats)
         
         # make longitude and latitude learnable
         df['x'], df['y'], df['z'] = latlon_to_xyz(df['latitude'], df['longitude'])
@@ -152,16 +146,18 @@ class TFTransformer:
         predict_mode=False
     ):
 
-        # Create a MultiNormalizer for the targets
-        target_normalizer = MultiNormalizer(
-            # Order of dict.values() is preserved
-            normalizers=list(self.normalizers.values())
-        )
+        # # Create a MultiNormalizer for the targets
+        # target_normalizer = MultiNormalizer(
+        #     # Order of dict.values() is preserved
+        #     normalizers=list(self.normalizers.values())
+        # )
+
+        target_normalizer = list(self.normalizers.values())[0]
 
         tsds = TimeSeriesDataSet(
             data,
             time_idx='timestamp',
-            target=self.continuous_targets,
+            target=self.continuous_targets[0],
             group_ids=['group_id'],  # Group by location for multi-region modeling
             min_encoder_length=max_encoder_length,
             max_encoder_length=max_encoder_length,
@@ -224,10 +220,12 @@ class TFTransformer:
             logger=logger,
         )
 
-        loss = MultiLoss(
-            # Order of dict.values() is preserved
-            metrics=list(self.loss_metrics.values())
-        )
+        # loss = MultiLoss(
+        #     # Order of dict.values() is preserved
+        #     metrics=list(self.loss_metrics.values())
+        # )
+
+        loss = list(self.loss_metrics.values())[0]
 
         tft = TemporalFusionTransformer.from_dataset(
             train_dataset,
@@ -460,8 +458,8 @@ class TFTransformer:
         )
 
         raw_output = raw_predictions.output.prediction
-        logging.info("Normalized output:")
-        logging.info(raw_output)
+        # logging.info("Denormalized output:")
+        # logging.info(raw_output)
 
         x = raw_predictions.x
 
@@ -469,7 +467,7 @@ class TFTransformer:
     
         # Extract and denormalize continuous targets
         for idx, target in enumerate(self.continuous_targets):
-            normalized_pred = np.array(raw_output[idx].cpu())
+            denormalized_pred = np.array(raw_output[idx].cpu())
             
             # Get the normalizer for this target
             normalizer: GroupNormalizer = self.normalizers[target]
@@ -479,14 +477,13 @@ class TFTransformer:
 
             scale = target_scale[1]
             offset = target_scale[0]
-            
-            # Denormalize
-            if normalizer.transformation == "standard":
-                denormalized_pred = normalized_pred * scale + offset
-            else:
-                raise Exception("Implementation required")
 
-            denormalized_pred = np.sort(denormalized_pred[0], axis=1)
+            # logging.info(f"Scale: {scale} | offset: {offset}")
+
+            # logging.info("Normalized:")
+            # logging.info((denormalized_pred - offset) / scale)
+
+            denormalized_pred = np.sort(denormalized_pred, axis=1)
 
             median_idx = denormalized_pred.shape[1] // 2
             
@@ -534,54 +531,10 @@ class TFTransformer:
             filters=[('group_id', '==', group_id)]
         )
 
-        # using 'recursive forecasting' for prediction past max_prediction_len
+        prediction_df = self.predict(location_data=location_df)
 
-        prediction_df = pd.DataFrame(
-            data=None,
-            columns=['timestamp', *self.all_targets]
-        )
-
-        predictions = self.predict(location_data=location_df)
+        digested_df = pd.DataFrame({'t2m_mean': prediction_df['t2m_mean_median']})
 
         return prediction_df
-
-    def remove_and_check_duplicates(self, df: pd.DataFrame) -> pd.DataFrame:
-        print("Removing and checking for duplicates...")
-        def get_duplicates(data):
-            points = set([(long, lat) for long, lat in zip(data['longitude'], data['latitude'])])
-            id_amounts = dict()
-            for long, lat in points:
-                group_id = h3.str_to_int(
-                    h3.latlng_to_cell(
-                        lat=lat, 
-                        lng=long, 
-                        res=Config.hexagon_resolution
-                    )
-                )
-                new_list = id_amounts.get(group_id, []) + [(long, lat)]
-                id_amounts.update({group_id: new_list})
-            return id_amounts
-        
-        # removing duplicates
-        id_amounts = get_duplicates(df)
-        new_df = df.copy()
-        duplicates_removed = 0
-        for key, points in id_amounts.items():
-            if len(points) > 1:
-                for point in points[1:]:
-                    new_df = new_df[~((new_df['longitude'] == point[0]) & (new_df['latitude'] == point[1]))]
-                    duplicates_removed += 1
-        print(f"{duplicates_removed} duplicates removed.")
-
-        # double checking for duplicates
-        id_amounts = get_duplicates(new_df)
-        for key, points in id_amounts.items():
-            if len(points) > 1:
-                print(f"{key} has {points}")
-        print("Done checking for duplicates.")
-
-        return new_df
-
-
 
 

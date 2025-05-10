@@ -16,6 +16,11 @@ NASA POWER API: weather data
 
 """
 
+if Config.download_climate_data:
+    from .data_sourcing.downloading import Downloader
+
+    Downloader.run()
+
 if Config.generate_summary_dataset:
     sds = SummaryDataset()
 
