@@ -25,10 +25,8 @@ land masses are used for querying new points from frontend
 """
 
 class LandQueryModel:
-    def __init__(self):
-        pass
-
-    def get_table(self):
+    @staticmethod
+    def get_table():
         gdf = gpd.read_file(
             filename=Config.landmass_filepath,
             # columns=["featurecla", "geometry"],
@@ -54,9 +52,10 @@ class LandQueryModel:
 
         return gdf
     
-    def show_geoms_on_world(self, polygons: List[BaseGeometry], geomdata: gpd.GeoDataFrame = None):
+    @staticmethod
+    def show_geoms_on_world(polygons: List[BaseGeometry], geomdata: gpd.GeoDataFrame = None):
         if geomdata is None:
-            geomdata = self.get_table()
+            geomdata = LandQueryModel.get_table()
 
         fig, ax = plt.subplots(figsize=(10, 8))
         geomdata.geometry.plot(ax=ax, color='white', edgecolor='black', alpha=1.0, label="Dataset 1")

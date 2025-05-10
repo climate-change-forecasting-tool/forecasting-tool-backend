@@ -22,7 +22,7 @@ warnings.filterwarnings("ignore")
 import optuna
 optuna.logging.set_verbosity(verbosity=optuna.logging.INFO)
 
-from src.utility import latlon_to_xyz, flatten_list
+from src.utility import latlon_to_xyz
 
 class TFTransformer: 
     def __init__(self):

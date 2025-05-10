@@ -1,22 +1,15 @@
-import os
 from typing import List
 from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely import is_valid
-import numpy as np
-import logging
 import h3
 from rtree import index
-import pyarrow as pa
-import pyarrow.parquet as pq
-import pandas as pd
-from src.utility import Timer, flatten_list
+from src.utility import Timer
 
 from src.configuration.config import Config
-from .climate_model import GRIB_Controller
-
 from src.datamodels import LandQueryModel
 
+import logging
 logging.basicConfig(level=logging.INFO)
 
 
@@ -30,110 +23,16 @@ process:
 5. Create new database with points and disaster data
 """
 
-class SummaryDataset:
+class PointGenerationModel:
     # We will save the data produced by this and load it afterward; will just be a db, not gdb
     def __init__(self): # lower resolution = larger area
-        self.resolution = Config.hexagon_resolution
-
-        self.climate_params = []
-
-        # print(flatten_list(Config.cams_files_and_vars.items()))
-
-        for climate_var_name in flatten_list(Config.cams_files_and_vars.values()):
-            self.climate_params.append((climate_var_name + '_min', pa.float64()))
-            self.climate_params.append((climate_var_name + '_mean', pa.float64()))
-            self.climate_params.append((climate_var_name + '_max', pa.float64()))
-
-
-        self.schema = pa.schema([
-            ("timestamp", pa.uint64()),
-            ("group_id", pa.int64()),
-            ("longitude", pa.float64()),
-            ("latitude", pa.float64()),
-        ] + self.climate_params)
-
-        self.lqm = LandQueryModel()
-
-        self.create_table()
-
-    def create_table(self):
-        if os.path.exists(Config.summary_dataset_filepath):
-            if Config.recreate_summary_dataset:
-                logging.info("Clearing Summary Dataset Parquet file and recreating now...")
-                self.clear_dataset()
-            else:
-                logging.info("Skipping Summary Dataset Parquet file creation.")
-                return
-        else:
-            logging.info("Summary Dataset Parquet file does not exist. Creating now...")
-            self.clear_dataset()
-
-        # Generate hexagon polygons across the world
-        logging.info("Creating hexagons...")
-
-        polygons, int_h3_indexes = self.generate_world_polygons()
-
-        if Config.show_init_hexagons:
-            self.lqm.show_geoms_on_world(polygons=polygons)
-
-        # IF ONLY WANTING LAND DATA, DO RTREE INTERSECTION STUFF HERE
-
-        polygons, int_h3_indexes = self.extract_land_hexagons(
-            hexagons=polygons, 
-            hexagon_ids=int_h3_indexes
-        )
-
-        if Config.show_post_hexagons:
-            self.lqm.show_geoms_on_world(polygons=polygons)
-
-        polygon_centroids = [polygon.centroid for polygon in polygons]
-
-        grib_controller = GRIB_Controller()
-
-        parquet_writer = pq.ParquetWriter(where=Config.summary_dataset_filepath, schema=self.schema)
-
-        # saving longitude, latitude, dates, disastertype, num deaths, num injured, property damage cost
-        logging.info("Saving values...")
-        with Timer("Saving values"):
-            for idx, (h3_index, point) in enumerate(zip(int_h3_indexes, polygon_centroids)):
-                with Timer(f"lon={point.x}, lat: {point.y}; group_id: {h3_index}; ({idx+1}/{len(int_h3_indexes)})"):
-                    climate_df = grib_controller.get_point_data(
-                        longitude=point.x,
-                        latitude=point.y
-                    )
-
-                    # print("Climate df:")
-                    # print(climate_df)
-
-                    # print(climate_df.index.to_series())
-
-                    dates = (climate_df.index.to_series() - Config.start_date).dt.days.astype(int)
-
-                    # print(dates)
-
-                    entry_dict = dict({
-                        "timestamp": pa.array(dates, type=pa.uint64()),
-                        "group_id": pa.array([h3_index] * len(dates), type=pa.int64()),
-                        "longitude": pa.array([point.x] * len(dates), type=pa.float64()),
-                        "latitude": pa.array([point.y] * len(dates), type=pa.float64()),
-                    })
-
-                    for climate_param, pa_type in self.climate_params:
-                        entry_dict.update({climate_param: pa.array(climate_df[climate_param], type=pa_type)})
-
-                    entry = pa.table(entry_dict)
-
-                    parquet_writer.write_table(table=entry)
-
-        parquet_writer.close()
-
-        logging.info("Summary dataset created")
+        pass
     
     def generate_world_polygons(self):
         h3_indexes = []
 
         for h3_index in h3.get_res0_cells():
-            h3_indexes.extend(h3.cell_to_children(h=h3_index, res=self.resolution))
+            h3_indexes.extend(h3.cell_to_children(h=h3_index, res=Config.hexagon_resolution))
 
         logging.info(f"Total hexagons: {len(h3_indexes)}")
 
@@ -150,7 +49,7 @@ class SummaryDataset:
         logging.info("Making rtree")
         # Making rtree
 
-        gdf = self.lqm.get_table()
+        gdf = LandQueryModel.get_table()
 
         with Timer("Rtree") as t:
             idx = index.Index()
@@ -176,20 +75,36 @@ class SummaryDataset:
             land_hexagons = []
             land_hexagon_ids = []
             for hexagon, hexagon_id in zip(hexagons, hexagon_ids):
-                # is_intersecting = has_intersection(hexagon)
-                # if is_intersecting:
                 if has_intersection(hexagon):
                     land_hexagons.append(hexagon)
                     land_hexagon_ids.append(hexagon_id)
         
         return land_hexagons, land_hexagon_ids
+    
+    def get_result(self):
+        # returns h3 indexes as integers, then centroids of the valid cells
+        # Generate hexagon polygons across the world
+        logging.info("Creating hexagons...")
 
-    def clear_dataset(self):
-        # Create an empty table
-        empty_table = pa.Table.from_batches([], schema=self.schema)
+        polygons, int_h3_indexes = self.generate_world_polygons()
 
-        # Write empty Parquet file
-        pq.write_table(empty_table, Config.summary_dataset_filepath)
+        if Config.show_init_hexagons:
+            LandQueryModel.show_geoms_on_world(polygons=polygons)
+
+        polygons, int_h3_indexes = self.extract_land_hexagons(
+            hexagons=polygons, 
+            hexagon_ids=int_h3_indexes
+        )
+
+        if Config.show_post_hexagons:
+            LandQueryModel.show_geoms_on_world(polygons=polygons)
+
+        polygon_centroids = [polygon.centroid for polygon in polygons]
+
+        # into (long, lat) tuples
+        latlon_points = [(point.x, point.y) for point in polygon_centroids]
+
+        return int_h3_indexes, latlon_points
 
     def get_group_id(self, longitude: float, latitude: float) -> int:
         group_id = h3.str_to_int(
@@ -200,6 +115,29 @@ class SummaryDataset:
             )
         )
         return group_id
+    
+    def get_coordinate_from_id(self, int_h3_index: int):
+        h3_index = h3.int_to_str(int_h3_index)
+
+        hexagon = Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(h3_index)])
+
+        point = hexagon.centroid
+
+        return (point.x, point.y)
+    
+    def save_ids(self, h3_indexes: List[int]):
+        import pickle
+
+        with open('db/h3_idxs.pkl', 'wb') as f:
+            pickle.dump(h3_indexes, f)
+
+    def load_ids(self):
+        import pickle
+
+        with open('db/h3_idxs.pkl', 'rb') as f:
+            loaded_list = pickle.load(f)
+
+        return loaded_list
 
 
 
