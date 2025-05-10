@@ -1,3 +1,3 @@
-from .disaster_model import DisasterModel
+from .climate_model import GRIB_Controller
 from .land_query_model import LandQueryModel
-from .point_generation_model import PointGenerationModel
+from .point_generation_model import SummaryDataset

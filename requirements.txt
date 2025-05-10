@@ -18,3 +18,9 @@ matplotlib==3.9.0
 python-dotenv==1.0.1
 h3==4.2.2
 rtree==1.4.0
+joblib
+cdsapi
+xarray
+cartopy
+netCDF4
+cfgrib

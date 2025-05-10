@@ -1,21 +1,19 @@
 import os
 from typing import List
-from shapely.geometry import Point, MultiPolygon, Polygon
+from shapely.geometry import Polygon
 from shapely.geometry.base import BaseGeometry
-from shapely.ops import triangulate
-from shapely import make_valid
+from shapely import is_valid
 import numpy as np
-import matplotlib.pyplot as plt
 import logging
 import h3
+from rtree import index
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pandas as pd
-from rtree import index
-from src.utility import Timer, get_nonunique_elements
+from src.utility import Timer, flatten_list
 
 from src.configuration.config import Config
-from .disaster_model import DisasterModel
+from .climate_model import GRIB_Controller
 
 from src.datamodels import LandQueryModel
 
@@ -32,63 +30,128 @@ process:
 5. Create new database with points and disaster data
 """
 
-class PointGenerationModel:
+class SummaryDataset:
     # We will save the data produced by this and load it afterward; will just be a db, not gdb
     def __init__(self): # lower resolution = larger area
         self.resolution = Config.hexagon_resolution
 
+        self.climate_params = []
+
+        # print(flatten_list(Config.cams_files_and_vars.items()))
+
+        for climate_var_name in flatten_list(Config.cams_files_and_vars.values()):
+            self.climate_params.append((climate_var_name + '_min', pa.float64()))
+            self.climate_params.append((climate_var_name + '_mean', pa.float64()))
+            self.climate_params.append((climate_var_name + '_max', pa.float64()))
+
+
         self.schema = pa.schema([
-            ("timestamp", pa.date64()),
+            ("timestamp", pa.uint64()),
+            ("group_id", pa.int64()),
             ("longitude", pa.float64()),
             ("latitude", pa.float64()),
-            ("has_landslide", pa.bool_()),
-            ("has_flood", pa.bool_()),
-            ("has_dry_mass_movement", pa.bool_()),
-            ("has_extreme_temperature", pa.bool_()),
-            ("has_storm", pa.bool_()),
-            ("has_drought", pa.bool_()),
-            ("total_deaths", pa.int64()),
-            ("num_injured", pa.int64()),
-            ("damage_cost", pa.int64()),
-        ])
+        ] + self.climate_params)
+
+        self.lqm = LandQueryModel()
 
         self.create_table()
 
     def create_table(self):
-        if os.path.exists(Config.combined_disaster_data_filepath):
-            if Config.recreate_disaster_database:
-                logging.info("Clearing Disaster Parquet file and recreating now...")
+        if os.path.exists(Config.summary_dataset_filepath):
+            if Config.recreate_summary_dataset:
+                logging.info("Clearing Summary Dataset Parquet file and recreating now...")
                 self.clear_dataset()
             else:
-                logging.info("Skipping Disaster Parquet file creation.")
+                logging.info("Skipping Summary Dataset Parquet file creation.")
                 return
         else:
-            if os.path.exists(Config.summary_dataset_filepath) and not Config.recreate_disaster_database:
-                logging.info("Skipping Disaster Parquet file creation.")
-                return
-            else:
-                logging.info("Disaster Parquet file does not exist. Creating now...")
-                self.clear_dataset()
+            logging.info("Summary Dataset Parquet file does not exist. Creating now...")
+            self.clear_dataset()
 
         # Generate hexagon polygons across the world
         logging.info("Creating hexagons...")
 
-        polygons = self.generate_world_polygons()
+        polygons, int_h3_indexes = self.generate_world_polygons()
 
-        if Config.show_hexagons:
-            LandQueryModel().show_geoms_on_world(polygons=polygons)
+        if Config.show_init_hexagons:
+            self.lqm.show_geoms_on_world(polygons=polygons)
 
-        disaster_model = DisasterModel()
+        # IF ONLY WANTING LAND DATA, DO RTREE INTERSECTION STUFF HERE
 
-        with Timer("Fetching disaster data") as t:
-            gdf = disaster_model.get_table()
-        
-        if Config.show_disasters:
-            logging.info("Populating world map with disasters...")
-            LandQueryModel().show_geoms_on_world(polygons=gdf.geometry)
+        polygons, int_h3_indexes = self.extract_land_hexagons(
+            hexagons=polygons, 
+            hexagon_ids=int_h3_indexes
+        )
 
+        if Config.show_post_hexagons:
+            self.lqm.show_geoms_on_world(polygons=polygons)
+
+        polygon_centroids = [polygon.centroid for polygon in polygons]
+
+        grib_controller = GRIB_Controller()
+
+        parquet_writer = pq.ParquetWriter(where=Config.summary_dataset_filepath, schema=self.schema)
+
+        # saving longitude, latitude, dates, disastertype, num deaths, num injured, property damage cost
+        logging.info("Saving values...")
+        with Timer("Saving values"):
+            for idx, (h3_index, point) in enumerate(zip(int_h3_indexes, polygon_centroids)):
+                with Timer(f"lon={point.x}, lat: {point.y}; group_id: {h3_index}; ({idx+1}/{len(int_h3_indexes)})"):
+                    climate_df = grib_controller.get_point_data(
+                        longitude=point.x,
+                        latitude=point.y
+                    )
+
+                    # print("Climate df:")
+                    # print(climate_df)
+
+                    # print(climate_df.index.to_series())
+
+                    dates = (climate_df.index.to_series() - Config.start_date).dt.days.astype(int)
+
+                    # print(dates)
+
+                    entry_dict = dict({
+                        "timestamp": pa.array(dates, type=pa.uint64()),
+                        "group_id": pa.array([h3_index] * len(dates), type=pa.int64()),
+                        "longitude": pa.array([point.x] * len(dates), type=pa.float64()),
+                        "latitude": pa.array([point.y] * len(dates), type=pa.float64()),
+                    })
+
+                    for climate_param, pa_type in self.climate_params:
+                        entry_dict.update({climate_param: pa.array(climate_df[climate_param], type=pa_type)})
+
+                    entry = pa.table(entry_dict)
+
+                    parquet_writer.write_table(table=entry)
+
+        parquet_writer.close()
+
+        logging.info("Summary dataset created")
+    
+    def generate_world_polygons(self):
+        h3_indexes = []
+
+        for h3_index in h3.get_res0_cells():
+            h3_indexes.extend(h3.cell_to_children(h=h3_index, res=self.resolution))
+
+        logging.info(f"Total hexagons: {len(h3_indexes)}")
+
+        # polygons = [make_valid(Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(h)])) for h in h3_indexes]
+        polygons = [Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(h)]) for h in h3_indexes]
+
+        polygons = [polygon for polygon in polygons if is_valid(polygon) and polygon.area < 55]
+
+        int_h3_indexes = [h3.str_to_int(h3_index) for h3_index in h3_indexes]
+
+        return polygons, int_h3_indexes
+    
+    def extract_land_hexagons(self, hexagons: List[BaseGeometry], hexagon_ids: List[int]):
         logging.info("Making rtree")
         # Making rtree
+
+        gdf = self.lqm.get_table()
+
         with Timer("Rtree") as t:
             idx = index.Index()
 
@@ -101,195 +164,32 @@ class PointGenerationModel:
 
         logging.info("Making intersections")
         with Timer("Intersections") as t:
-            def get_intersection(polygon: Polygon):
+            def has_intersection(polygon: Polygon):
                 possible_matches = list(idx.intersection(polygon.bounds))  # Get candidate polygons
                 for match_id in possible_matches:
                     candidate_polygon = gdf.loc[match_id, "geometry"]
                     intersection = polygon.intersection(candidate_polygon)
                     if not intersection.is_empty:
-                        return intersection
-                return None
+                        return True
+                return False
             
-            intersections = []
-            for polygon in polygons:
-                intersection = get_intersection(polygon)
-                if intersection:
-                    intersections.append(intersection)
-
-        # Generate a random point in the intersected region
-        logging.info("Generating points within hexagons...")
-        with Timer("Random hexagon points") as t:
-            carpet_points = [self.random_point_in_polygon(p) for p in intersections]
-
-        parquet_writer = pq.ParquetWriter(where=Config.combined_disaster_data_filepath, schema=self.schema)
-
-        # saving longitude, latitude, dates, disastertype, num deaths, num injured, property damage cost
-        logging.info("Saving values...")
-        with Timer("Saving values") as t:
-            def get_intersection_ids(point: Point):
-                possible_matches = list(idx.intersection(point.bounds))  # Get candidate polygons
-                true_intersection_ids = []
-                for match_id in possible_matches:
-                    candidate_polygon = gdf.loc[match_id, "geometry"]
-                    if point.intersects(candidate_polygon):
-                        true_intersection_ids.append(match_id)
-                return true_intersection_ids
-
-            for i, point in enumerate(carpet_points):
-                filtered_gdf = gdf.loc[get_intersection_ids(point)]
-
-                for row in filtered_gdf.itertuples():
-                    dates = pd.date_range(start=row.start_date, end=row.end_date, freq="W", inclusive="both")
-
-                    entry = pa.table({
-                        "timestamp": pa.array(dates, type=pa.date64()),
-                        "longitude": pa.array([point.x] * len(dates), type=pa.float64()),
-                        "latitude": pa.array([point.y] * len(dates), type=pa.float64()),
-                        "has_landslide": pa.array([row.disastertype == 'landslide'] * len(dates), type=pa.bool_()),
-                        "has_flood": pa.array([row.disastertype == 'flood'] * len(dates), type=pa.bool_()),
-                        "has_dry_mass_movement": pa.array([row.disastertype == 'mass movement (dry)'] * len(dates), type=pa.bool_()),
-                        "has_extreme_temperature": pa.array([row.disastertype == 'extreme temperature '] * len(dates), type=pa.bool_()),
-                        "has_storm": pa.array([row.disastertype == 'storm'] * len(dates), type=pa.bool_()),
-                        "has_drought": pa.array([row.disastertype == 'drought'] * len(dates), type=pa.bool_()),
-                        "total_deaths": pa.array([row.total_deaths] * len(dates), type=pa.int64()),
-                        "num_injured": pa.array([row.num_injured] * len(dates), type=pa.int64()),
-                        "damage_cost": pa.array([row.damage_cost] * len(dates), type=pa.int64()),
-                    })
-
-                    parquet_writer.write_table(table=entry)
-
-        parquet_writer.close()
-
-        logging.info("Disaster point generation process complete")
-    
-    def generate_world_polygons(self):
-        h3_indexes = []
-
-        for h3_index in h3.get_res0_cells():
-            h3_indexes.extend(h3.cell_to_children(h=h3_index, res=self.resolution))
-
-        logging.info(f"Total hexagons: {len(h3_indexes)}")
-
-        polygons = [make_valid(Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(h)])) for h in h3_indexes]
-
-        return polygons
-
-    def random_point_in_polygon(self, polygon: Polygon) -> Point:
-        # Triangulate the polygon
-        triangles = triangulate(polygon)
+            land_hexagons = []
+            land_hexagon_ids = []
+            for hexagon, hexagon_id in zip(hexagons, hexagon_ids):
+                # is_intersecting = has_intersection(hexagon)
+                # if is_intersecting:
+                if has_intersection(hexagon):
+                    land_hexagons.append(hexagon)
+                    land_hexagon_ids.append(hexagon_id)
         
-        # Compute areas and cumulative distribution
-        areas = np.array([t.area for t in triangles])
-        cumulative_areas = np.cumsum(areas)
-        
-        # Pick a triangle based on area weights
-        r = np.random.uniform(0, cumulative_areas[-1])
-        chosen_triangle = triangles[np.searchsorted(cumulative_areas, r)]
-
-        # Generate a random point inside the chosen triangle using barycentric coordinates
-        p1, p2, p3 = chosen_triangle.exterior.coords[:3]
-        r1, r2 = np.sqrt(np.random.uniform()), np.random.uniform()
-        x = (1 - r1) * p1[0] + (r1 * (1 - r2)) * p2[0] + (r1 * r2) * p3[0]
-        y = (1 - r1) * p1[1] + (r1 * (1 - r2)) * p2[1] + (r1 * r2) * p3[1]
-
-        return Point(x, y)
-    
-    def get_all_points(self):
-        pq_table = pd.read_parquet(
-            path=Config.combined_disaster_data_filepath, 
-            engine='pyarrow',
-            columns=['longitude', 'latitude']
-        ).drop_duplicates(keep='first')
-
-        points = list(pq_table.itertuples(index=False, name=None))
-
-        return points
-    
-    def get_data_for_point(self, longitude: float, latitude: float):
-        pq_table: pd.DataFrame = pd.read_parquet(
-            path=Config.combined_disaster_data_filepath, 
-            engine='pyarrow',
-        )
-
-        pq_table['timestamp'] = pd.to_datetime(pq_table['timestamp'])
-
-        pq_table = pq_table[(Config.start_date <= pq_table['timestamp']) & (pq_table['timestamp'] <= Config.end_date)]
-
-        dates = pd.date_range(start=Config.start_date, end=Config.end_date, freq="W", inclusive="both")
-
-        pq_table = pq_table[(pq_table['longitude'] == longitude) & (pq_table['latitude'] == latitude)]
-
-        pq_table.drop(['longitude', 'latitude'], axis=1, inplace=True)
-
-        #### TODO: need to drop duplicates while keeping the most data; 
-        #### ex: look up rows 3587 and 3645 in emdat, they have same # deaths, but diff. no. affected
-
-        # temporary
-        # pq_table.drop_duplicates(subset='timestamp', keep='first', inplace=True)
-        dup_timestamps = get_nonunique_elements(pq_table['timestamp'])
-
-        for dup_timestamp in dup_timestamps:
-            dup_entries = pq_table[pq_table['timestamp'] == dup_timestamp]
-
-            has_landslide = np.any(dup_entries['has_landslide'])
-            has_flood = np.any(dup_entries['has_flood'])
-            has_dry_mass_movement = np.any(dup_entries['has_dry_mass_movement'])
-            has_extreme_temperature = np.any(dup_entries['has_extreme_temperature'])
-            has_storm = np.any(dup_entries['has_storm'])
-            has_drought = np.any(dup_entries['has_drought'])
-            total_deaths = np.sum(dup_entries['total_deaths'])
-            num_injured = np.sum(dup_entries['num_injured'])
-            damage_cost = np.sum(dup_entries['damage_cost'])
-
-            # delete all records with a matching duplicate timestamp
-            pq_table = pq_table[pq_table['timestamp'] != dup_timestamp]
-
-            pq_table.loc[len(pq_table)] = [
-                dup_timestamp, 
-                has_landslide,
-                has_flood,
-                has_dry_mass_movement,
-                has_extreme_temperature,
-                has_storm,
-                has_drought,
-                total_deaths,
-                num_injured,
-                damage_cost
-            ]
-
-        existing_dates = pq_table['timestamp']
-
-        missing_dates = list(np.setdiff1d(pd.to_datetime(dates), existing_dates))
-        
-        nodisaster_table = pd.DataFrame({
-            "timestamp": missing_dates,
-            "has_landslide": pa.array([False] * len(missing_dates), type=pa.bool_()),
-            "has_flood": pa.array([False] * len(missing_dates), type=pa.bool_()),
-            "has_dry_mass_movement": pa.array([False] * len(missing_dates), type=pa.bool_()),
-            "has_extreme_temperature": pa.array([False] * len(missing_dates), type=pa.bool_()),
-            "has_storm": pa.array([False] * len(missing_dates), type=pa.bool_()),
-            "has_drought": pa.array([False] * len(missing_dates), type=pa.bool_()),
-            "total_deaths": [0] * len(missing_dates),
-            "num_injured": [0] * len(missing_dates),
-            "damage_cost": [0] * len(missing_dates),
-        })
-
-        nodisaster_table['timestamp'] = pd.to_datetime(nodisaster_table['timestamp'])
-
-        # merge tables
-        merged = pd.concat([pq_table, nodisaster_table], join="inner")
-
-        merged.set_index('timestamp', inplace=True)
-        merged.sort_index(inplace=True)
-
-        return merged
+        return land_hexagons, land_hexagon_ids
 
     def clear_dataset(self):
         # Create an empty table
         empty_table = pa.Table.from_batches([], schema=self.schema)
 
         # Write empty Parquet file
-        pq.write_table(empty_table, Config.combined_disaster_data_filepath)
+        pq.write_table(empty_table, Config.summary_dataset_filepath)
 
     def get_group_id(self, longitude: float, latitude: float) -> int:
         group_id = h3.str_to_int(

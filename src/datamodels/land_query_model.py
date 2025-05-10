@@ -26,7 +26,10 @@ land masses are used for querying new points from frontend
 
 class LandQueryModel:
     def __init__(self):
-        self.gdf = gpd.read_file(
+        pass
+
+    def get_table(self):
+        gdf = gpd.read_file(
             filename=Config.landmass_filepath,
             # columns=["featurecla", "geometry"],
             bbox=(-180, 90, 180, -60)
@@ -39,23 +42,24 @@ class LandQueryModel:
         # logging.info(self.gdf)
 
         # We only want to keep the major land features
-        self.gdf.drop(self.gdf[self.gdf['featurecla'] != 'Land'].index, inplace=True)
+        gdf.drop(gdf[gdf['featurecla'] != 'Land'].index, inplace=True)
 
         # We don't want to process small, likely uninhabited islands
         # self.gdf.drop(self.gdf[self.gdf['scalerank'] >= 3.0].index, inplace=True)
 
         # # drop Antarctica from consideration, b/c no important disasters will occur there
-        self.gdf.loc[0, "geometry"] = MultiPolygon(self.gdf.geometry[0].geoms[1:])
+        gdf.loc[0, "geometry"] = MultiPolygon(gdf.geometry[0].geoms[1:])
 
         # self.combined_landmass = self.gdf.geometry.unary_union
 
+        return gdf
     
-    def is_on_land(self, longitude: float, latitude: float):
-        return self.gdf.contains(Point(longitude, latitude))
-    
-    def show_geoms_on_world(self, polygons: List[BaseGeometry]):
+    def show_geoms_on_world(self, polygons: List[BaseGeometry], geomdata: gpd.GeoDataFrame = None):
+        if geomdata is None:
+            geomdata = self.get_table()
+
         fig, ax = plt.subplots(figsize=(10, 8))
-        self.gdf.geometry.plot(ax=ax, color='white', edgecolor='black', alpha=1.0, label="Dataset 1")
+        geomdata.geometry.plot(ax=ax, color='white', edgecolor='black', alpha=1.0, label="Dataset 1")
         patches = []
         for geom in polygons:
             if isinstance(geom, MultiPolygon):

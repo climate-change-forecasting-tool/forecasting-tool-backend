@@ -1,11 +1,10 @@
 import csv
 from datetime import datetime
 
-from .services import NASAService
 from .configuration.config import Config
 import logging
 
-from .dataset_summary import SummaryDataset
+from .datamodels.point_generation_model import SummaryDataset
 
 logging.basicConfig(level=logging.INFO)
 
@@ -17,13 +16,8 @@ NASA POWER API: weather data
 
 """
 
-sds = SummaryDataset()
-
 if Config.generate_summary_dataset:
-    if Config.recreate_summary_dataset:
-        sds.clear_dataset()
-
-    sds.upload_data(start_date=Config.start_date, end_date=Config.end_date)
+    sds = SummaryDataset()
 
 if Config.activate_tft:
     from .model import TFTransformer

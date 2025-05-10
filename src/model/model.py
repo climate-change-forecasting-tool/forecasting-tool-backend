@@ -1,4 +1,5 @@
 import pickle
+from typing import List
 import h3
 import pandas as pd
 import numpy as np
@@ -21,7 +22,7 @@ logging.basicConfig(level=logging.INFO)
 import optuna
 optuna.logging.set_verbosity(verbosity=optuna.logging.INFO)
 
-from src.utility import latlon_to_xyz
+from src.utility import latlon_to_xyz, flatten_list
 
 class TFTransformer: 
     def __init__(self):
@@ -36,9 +37,7 @@ class TFTransformer:
             verbose=True
         )
 
-        self.continuous_targets = ['num_deaths', 'num_injured']#, 'damage_cost']
-        self.binary_targets = ['has_landslide', 'has_flood', 'has_dry_mass_movement', 'has_extreme_temperature', 'has_storm', 'has_drought']
-        # self.all_targets = self.continuous_targets + self.binary_targets
+        self.continuous_targets = ['t2m_mean']
         
         # Defining loss metrics and normalizers for targets
         self.loss_metrics = dict()
@@ -51,62 +50,20 @@ class TFTransformer:
             self.normalizers.update({
                 target: GroupNormalizer(
                     groups=['group_id'],
-                    transformation="softplus",
-                    center=False,
-                    scale_by_group=True
+                    # transformation="standard"
                 )
             })
 
-        # for target in self.binary_targets:
-        #     self.loss_metrics.update({
-        #         target: nn.BCEWithLogitsLoss()
-        #     })
-        #     self.normalizers.update({
-        #         target: GroupNormalizer(
-        #             groups=['group_id'],
-        #             transformation=None,
-        #             center=False,
-        #             scale_by_group=False
-        #         )
-        #     })
+        self.unknown_climate_reals: List[str] = []
+        for climate_var_name in flatten_list(Config.cams_files_and_vars.values()):
+            for modifier in ['min', 'mean', 'max']:
+                self.unknown_climate_reals.append(climate_var_name + '_' + modifier)
 
-        self.unknown_climate_reals = [
-            "avg_temperature_2m",
-            "min_temperature_2m",
-            "max_temperature_2m",
-            "avg_dewfrostpoint_2m",
-            # "min_dewfrostpoint_2m",
-            # "max_dewfrostpoint_2m",
-            "avg_precipitation",
-            # "min_precipitation",
-            # "max_precipitation",
-            "avg_windspeed_2m",
-            # "min_windspeed_2m",
-            # "max_windspeed_2m",
-            "avg_windspeed_10m",
-            # "min_windspeed_10m",
-            # "max_windspeed_10m",
-            "avg_windspeed_50m",
-            # "min_windspeed_50m",
-            # "max_windspeed_50m",
-            "avg_humidity_2m",
-            # "min_humidity_2m",
-            # "max_humidity_2m",
-            "avg_surface_pressure",
-            # "min_surface_pressure",
-            # "max_surface_pressure",
-            "avg_transpiration",
-            # "min_transpiration",
-            # "max_transpiration",
-            "avg_evaporation",
-            # "min_evaporation",
-            # "max_evaporation"
-        ]
+        self.unknown_climate_reals = list(set(self.unknown_climate_reals).difference(self.continuous_targets))
         
         df['timestamp'] = df['timestamp'].astype(int)
-        df['has_disaster'] = df[self.binary_targets].any(axis=1).astype(float)
-        # df[self.binary_targets] = df[self.binary_targets].astype(int).astype(float)
-        df.drop(self.binary_targets, axis=1, inplace=True)
+
+        logging.info(df)
 
         # removes any duplicates
         df = self.remove_and_check_duplicates(df)
@@ -116,14 +73,10 @@ class TFTransformer:
         #     group_stats = df.groupby("group_id")[continuous_target].agg(["min", "max", "std", "count"])
         #     logging.info(group_stats)
         
-        scaler = StandardScaler()       # apply standard scaling 
-        df[['elevation']] = scaler.fit_transform(df[['elevation']])
-        
         # make longitude and latitude learnable
         df['x'], df['y'], df['z'] = latlon_to_xyz(df['latitude'], df['longitude'])
 
         # splitting by date
-        
         df.drop(['longitude', 'latitude'], axis=1, inplace=True)
 
         df.sort_values("timestamp").groupby("group_id")
@@ -137,9 +90,22 @@ class TFTransformer:
         self.val_df = df[(df['timestamp'] >= train_end) & (df['timestamp'] < val_end)]
         self.test_df = df[df['timestamp'] >= val_end]
 
+        scaler = StandardScaler()       # apply standard scaling 
+        scaler.fit(self.train_df[self.unknown_climate_reals])
+
+        self.data_means = scaler.mean_
+        self.data_stds = scaler.var_
+
+        self.val_df[self.unknown_climate_reals] = scaler.transform(self.val_df[self.unknown_climate_reals])
+        self.test_df[self.unknown_climate_reals] = scaler.transform(self.test_df[self.unknown_climate_reals])
+
+        logging.info(self.train_df)
+        logging.info(self.val_df)
+        logging.info(self.test_df)
+
         # Define max prediction & history length
-        self.max_prediction_length = 52   # Forecast next 'x' weeks
-        self.max_encoder_length = 520     # Use past 'x' weeks for prediction
+        self.max_prediction_length = 5   # Forecast next 'x' days; 14
+        self.max_encoder_length = 10     # Use past 'x' days for prediction; 365
 
         if Config.benchmark_tft:
             logging.info("Benchmark:")
@@ -195,12 +161,12 @@ class TFTransformer:
         tsds = TimeSeriesDataSet(
             data,
             time_idx='timestamp',
-            target=self.continuous_targets, # self.all_targets,
+            target=self.continuous_targets,
             group_ids=['group_id'],  # Group by location for multi-region modeling
             min_encoder_length=max_encoder_length,
             max_encoder_length=max_encoder_length,
             max_prediction_length=max_prediction_length,
-            static_reals=['x','y','z', 'elevation'],  # Static features
+            static_reals=['x','y','z'],  # Static features
             time_varying_known_reals=['timestamp'], # season?
             time_varying_unknown_reals=self.continuous_targets + self.unknown_climate_reals,
             target_normalizer = target_normalizer,
@@ -468,7 +434,6 @@ class TFTransformer:
             'x': [encoder_data['x'].iloc[0]] * prediction_length,
             'y': [encoder_data['y'].iloc[0]] * prediction_length,
             'z': [encoder_data['z'].iloc[0]] * prediction_length,
-            'elevation': [encoder_data['elevation'].iloc[-1]] * prediction_length
         }
 
         for col in self.continuous_targets + self.unknown_climate_reals:
@@ -516,35 +481,25 @@ class TFTransformer:
             offset = target_scale[0]
             
             # Denormalize
-            if normalizer.transformation == "softplus":
-                denormalized_pred = np.log(normalized_pred * scale + offset)
+            if normalizer.transformation == "standard":
+                denormalized_pred = normalized_pred * scale + offset
             else:
                 raise Exception("Implementation required")
-                # For other transformations
-                # denormalized_pred = normalized_pred * scale + offset
 
-            denormalized_pred = denormalized_pred[0]
+            denormalized_pred = np.sort(denormalized_pred[0], axis=1)
+
+            median_idx = denormalized_pred.shape[1] // 2
             
             predictions[target + '_lower'] = denormalized_pred[:, 0]
-            predictions[target + '_median'] = denormalized_pred[:, 1]
-            predictions[target + '_upper'] = denormalized_pred[:, 2]
-        
-        # # Extract binary targets (probabilities)
-        # for target in self.binary_targets:
-        #     # For binary targets, we get probabilities from sigmoid activation
-        #     prob = torch.sigmoid(raw_predictions[target].prediction).detach().cpu().numpy()
-        #     predictions[target] = prob
-        #     # Also add binary predictions (0/1) using 0.5 threshold
-        #     predictions[f"{target}_binary"] = (prob > 0.5).astype(int)
+            predictions[target + '_median'] = denormalized_pred[:, median_idx]
+            predictions[target + '_upper'] = denormalized_pred[:, -1]
 
         predictions_df = pd.DataFrame(predictions)
         
         return predictions_df
         
     def predict_test(self):
-        counts = self.train_df[self.train_df["has_disaster"] == 1.0].groupby("group_id").size()
-        group_id = counts.idxmax()
-        logging.info(f"{group_id}'s max count: {counts.max()}")
+        group_id = self.train_df.iloc[0]['group_id']
 
         prev_df = pd.concat([self.train_df, self.val_df])
         prev_df = prev_df[prev_df['group_id'] == group_id]
@@ -590,7 +545,7 @@ class TFTransformer:
 
         return prediction_df
 
-    def remove_and_check_duplicates(self, df):
+    def remove_and_check_duplicates(self, df: pd.DataFrame) -> pd.DataFrame:
         print("Removing and checking for duplicates...")
         def get_duplicates(data):
             points = set([(long, lat) for long, lat in zip(data['longitude'], data['latitude'])])

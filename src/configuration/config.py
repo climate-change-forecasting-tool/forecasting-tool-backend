@@ -6,31 +6,41 @@ class Config:
 
     ### filepaths
 
-    disaster_gdb_filepath = "data/pend-gdis-1960-2018-disasterlocations-gdb/pend-gdis-1960-2018-disasterlocations.gdb"
-    emdat_data_filepath = "data/emdat_disasterdata.xlsx"
+    cams_files_and_vars = {
+        "data/714aa50481381d97419b0527369f12ac.grib": [
+            't2m',  # temperature 2m; K
+            'u10',  # wind speed 10m u-comp; m/s
+            'v10',  # wind speed 10m v-comp; m/s
+        ],
+        # "": [
+        #     'lsm', # land sea mask; 0-1
+        #     'sp', # Surface pressure; Pa
+        #     'aod550', # Total aerosol optical depth at 550 nm; ~
+        # ],
+        # "": [
+        #     'tc_ch4', # Total column methane; kg/m^2
+        #     'tcno2', # Total column nitrogen dioxide; kg/m^2
+        #     'tco3' # Total column ozone; kg/m^2
+        # ],
+        # "": [
+        #     'tcso2', # Total column sulphur dioxide; kg/m^2
+        #     'tcwv' # Total column water vapour; kg/m^2
+        # ],
+    }
+
     landmass_filepath = "data/ne_10m_land"
-    combined_disaster_data_filepath = "db/disasters.parquet"
     summary_dataset_filepath = "db/summary_data.parquet"
     tft_checkpoint_path = "checkpoints/epoch=3-val_loss=0.06.ckpt"
 
-    ### disaster database
-
-    furthest_back_time = datetime(1981, 1, 1) # DO NOT MODIFY!!!
-
-    recreate_disaster_database = False
-    hexagon_resolution = 2
-    show_hexagons = False
-    show_disasters = False # is very slow
-
     ### summary dataset
 
+    hexagon_resolution = 2
+    show_init_hexagons = True
+    show_post_hexagons = True
     generate_summary_dataset = False # main driver for summary dataset
-
     recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
-    start_date = datetime(1981, 1, 4) # earliest is 1981; ENSURE IT IS A SUNDAY
-    end_date = datetime(2018, 12, 29) # latest is 2018; ENSURE IT IS A SATURDAY
-    show_points = False # shows all points on world map
-    num_workers = 4 # number of workers used to make data for summary dataset
+    start_date = datetime(2003, 1, 1) # earliest is datetime(2003, 1, 1)
+    end_date = datetime(2003, 1, 31) # latest is datetime(2024, 12, 31)
 
     ### ML model
 
