@@ -14,5 +14,14 @@ class Prober:
         logging.info("Variables:")
         logging.info(self.ds.variables)
 
+
+
+
 if __name__ == '__main__':
-    p = Prober(grib_filename="")
+    # p = Prober(grib_filename="")
+
+    file = pd.read_parquet(path="db/partitioned_data/2m_temperature.parquet", engine="pyarrow")
+
+    file.groupby(['group_id', 'date'])
+
+    logging.info(file)

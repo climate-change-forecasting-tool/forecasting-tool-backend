@@ -58,9 +58,12 @@ class TFTransformer:
 
         self.unknown_climate_reals: List[str] = []
         for climate_var_name in list(Config.climate_data_param_names.keys()):
-            for modifier in ['min', 'mean', 'max']:
+            for modifier in ['min', 'mean', 'max']: # ['min', 'mean', 'max']
                 self.unknown_climate_reals.append(climate_var_name + '_' + modifier)
 
+        self.unknown_climate_reals.remove('lsm_min')
+        self.unknown_climate_reals.remove('lsm_max')
+        
         self.unknown_climate_reals = list(set(self.unknown_climate_reals).difference(self.continuous_targets))
         
         df['timestamp'] = df['timestamp'].astype(int)

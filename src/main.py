@@ -39,7 +39,7 @@ if Config.download_climate_data:
 if Config.generate_summary_dataset:
     sds = SummaryDataset()
 
-    sds.generate()
+    sds.generate(indexes=int_h3_indexes, points = h3_points)
 
 if Config.activate_tft:
     from .model import TFTransformer
