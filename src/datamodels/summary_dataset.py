@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 from typing import List, Tuple
 import numpy as np
@@ -5,12 +6,14 @@ import pyarrow as pa
 import pandas as pd
 
 from src.configuration.config import Config
+from src.utility import get_astronomical_season_df
 
 import logging
 logging.basicConfig(level=logging.INFO)
 
 class SummaryDataset:
     def __init__(self):
+        pass
 
         self.climate_params = []
 
@@ -25,6 +28,7 @@ class SummaryDataset:
             ("group_id", pa.int64()),
             ("longitude", pa.float64()),
             ("latitude", pa.float64()),
+            ("season", pa.string()),
         ] + self.climate_params)
 
     def generate(self, indexes: List[int], points: List[Tuple[float, float]]):
@@ -38,13 +42,14 @@ class SummaryDataset:
         else:
             logging.info("Summary Dataset Parquet file does not exist. Creating now...")
 
-        partitioned_files = [f for f in os.listdir(Config.partitioned_climate_data_dir)]
-        file_variables = [v[:-5] for v in partitioned_files]
-
         group_point_df = pd.DataFrame(
             data=np.hstack([np.array(points), np.array(indexes)[:, np.newaxis]]), 
-            columns=["target_lon", "target_lat", "group_id"]
+            columns=["longitude", "latitude", "group_id"]
         ).set_index(['group_id'])
+
+        partitioned_files = [f for f in os.listdir(Config.partitioned_climate_data_dir) if f[:-8] in list(Config.climate_data_param_names.keys())]
+
+        # TODO TODO TODO TODO TODO: I forgot what the column names were
 
         total_df = pd.concat([
             pd.read_parquet(
@@ -61,7 +66,10 @@ class SummaryDataset:
         logging.info(final_df)
 
         final_df.reset_index(drop=False, inplace=True)
-        final_df.rename(columns={'date': 'timestamp'}, inplace=True)
+        final_df.rename(columns={'date': 'timestamp'}, inplace=True)   
+        
+        final_df["season"] = final_df.apply(get_astronomical_season_df, axis=1)
+        final_df["season"] = final_df["season"].astype("category")
 
         final_df.to_parquet(path=Config.summary_dataset_filepath, engine='pyarrow', index=True)
 

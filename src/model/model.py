@@ -3,7 +3,7 @@ from typing import List
 import h3
 import pandas as pd
 import numpy as np
-from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet, QuantileLoss, RMSE, Baseline, GroupNormalizer, MultiLoss
+from pytorch_forecasting import NaNLabelEncoder, TemporalFusionTransformer, TimeSeriesDataSet, QuantileLoss, RMSE, Baseline, GroupNormalizer, MultiLoss
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 import lightning.pytorch as pl
@@ -14,6 +14,7 @@ from pytorch_forecasting.data.encoders import MultiNormalizer
 import torch
 from src.configuration.config import Config
 import os
+from datetime import timedelta
 
 import logging
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +23,7 @@ warnings.filterwarnings("ignore")
 import optuna
 optuna.logging.set_verbosity(verbosity=optuna.logging.INFO)
 
-from src.utility import latlon_to_xyz
+from src.utility import latlon_to_xyz, get_astronomical_season
 
 class TFTransformer: 
     def __init__(self):
@@ -66,7 +67,10 @@ class TFTransformer:
         
         self.unknown_climate_reals = list(set(self.unknown_climate_reals).difference(self.continuous_targets))
         
-        df['timestamp'] = df['timestamp'].astype(int)
+        df['season'] = df['season'].astype('category')
+
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        df['timestamp'] = (df['timestamp'] - df['timestamp'].min()).dt.astype(int)
 
         logging.info(df)
         
@@ -76,7 +80,10 @@ class TFTransformer:
         # splitting by date
         df.drop(['longitude', 'latitude'], axis=1, inplace=True)
 
-        df.sort_values("timestamp").groupby("group_id")
+        df.sort_values("timestamp").groupby("group_id") # inplace = True ?
+
+        logging.info("Sorted and grouped:")
+        logging.info(df)
 
         #training and validation set for model
         max_datapoints = df['timestamp'].max()
@@ -165,10 +172,14 @@ class TFTransformer:
             min_encoder_length=max_encoder_length,
             max_encoder_length=max_encoder_length,
             max_prediction_length=max_prediction_length,
+            time_varying_known_categoricals=['season'],
             static_reals=['x','y','z'],  # Static features
             time_varying_known_reals=['timestamp'], # season?
             time_varying_unknown_reals=self.continuous_targets + self.unknown_climate_reals,
             target_normalizer = target_normalizer,
+            categorical_encoders={
+                "season": NaNLabelEncoder().fit(data["season"])
+            },
             add_relative_time_idx=True,
             add_target_scales=True,
             add_encoder_length=True,
@@ -440,7 +451,17 @@ class TFTransformer:
         for col in self.continuous_targets + self.unknown_climate_reals:
             decoder_data[col] = [0.] * prediction_length
 
+        future_datetimes = [Config.start_date + timedelta(days=d) for d in future_timestamps]
+        decoder_data['season'] = [
+            get_astronomical_season(
+                date=future_dt, 
+                latitude=np.rad2deg(np.arcsin(z_val)) # gives latitude
+            ) 
+            for future_dt, z_val in zip(future_datetimes, decoder_data['z'])
+        ]
+
         decoder_df = pd.DataFrame(decoder_data)
+        decoder_df['season'] = decoder_df['season'].astype('category')
 
         combined_data = pd.concat([encoder_data, decoder_df])
 

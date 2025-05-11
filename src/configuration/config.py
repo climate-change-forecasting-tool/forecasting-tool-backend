@@ -13,7 +13,7 @@ class Config:
         'total_aerosol_optical_depth_550nm': 'aod550', # Total aerosol optical depth at 550 nm; ~
         'total_column_methane': 'tc_ch4', # Total column methane; kg/m^2
         'total_column_nitrogen_dioxide': 'tcno2', # Total column nitrogen dioxide; kg/m^2
-        'total_column_ozone': 'tco3', # Total column ozone; kg/m^2
+        'total_column_ozone': 'gtco3', # Total column ozone; kg/m^2
         'total_column_sulphur_dioxide': 'tcso2', # Total column sulphur dioxide; kg/m^2
         'total_column_water_vapour': 'tcwv', # Total column water vapour; kg/m^2
     })
@@ -38,12 +38,13 @@ class Config:
 
     start_date = datetime(2003, 1, 1) # earliest is datetime(2003, 1, 1)
     end_date = datetime(2024, 12, 31) # latest is datetime(2024, 12, 31)
-    download_climate_data = True
+    download_climate_data = False
     redownload_climate_data = False
+    num_downloaders = 8
 
     ### summary dataset
 
-    generate_summary_dataset = False # main driver for summary dataset
+    generate_summary_dataset = True # main driver for summary dataset
     recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
 
     ### ML model
