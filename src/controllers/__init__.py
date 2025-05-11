@@ -1,2 +1,1 @@
-from src.controllers.noaa_controller import NOAAController
-from src.controllers.nasa_power_controller import NASAController
+from .nasa_power_controller import NASAController
