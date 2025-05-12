@@ -3,6 +3,7 @@ import os
 from typing import List, Tuple
 import numpy as np
 import pyarrow as pa
+import pyarrow.parquet as pq
 import pandas as pd
 
 from src.configuration.config import Config
@@ -15,23 +16,37 @@ class SummaryDataset:
     def __init__(self):
         pass
 
-        self.climate_params = []
-
-        for climate_var_name in Config.climate_data_param_names.keys():
-            self.climate_params.append((climate_var_name + '_min', pa.float64()))
-            self.climate_params.append((climate_var_name + '_mean', pa.float64()))
-            self.climate_params.append((climate_var_name + '_max', pa.float64()))
-
+        self.climate_params = [
+            ('t2m_min', pa.float32()),
+            ('t2m_mean', pa.float32()),
+            ('t2m_max', pa.float32()),
+            ('u10_min', pa.float32()),
+            ('u10_mean', pa.float32()),
+            ('u10_max', pa.float32()),
+            ('v10_min', pa.float32()),
+            ('v10_mean', pa.float32()),
+            ('v10_max', pa.float32()),
+            ('lsm_mean', pa.float32()),
+            ('sp_mean', pa.float32()),
+            ('aod550_max', pa.float32()),
+            ('tc_ch4_max', pa.float32()),
+            ('tcno2_max', pa.float32()),
+            ('gtco3_max', pa.float32()),
+            ('tcso2_max', pa.float32()),
+            ('tcwv_max', pa.float32()),
+        ]
 
         self.schema = pa.schema([
-            ("timestamp", pa.uint64()),
+            ("timestamp", pa.date64()),
             ("group_id", pa.int64()),
             ("longitude", pa.float64()),
             ("latitude", pa.float64()),
             ("season", pa.string()),
         ] + self.climate_params)
 
-    def generate(self, indexes: List[int], points: List[Tuple[float, float]]):
+        self.table_creation()
+
+    def table_creation(self):
         if os.path.exists(Config.summary_dataset_filepath):
             if Config.recreate_summary_dataset:
                 logging.info("Clearing Summary Dataset Parquet file and recreating now...")
@@ -41,42 +56,71 @@ class SummaryDataset:
                 return
         else:
             logging.info("Summary Dataset Parquet file does not exist. Creating now...")
+            self.clear_dataset()
 
-        group_point_df = pd.DataFrame(
-            data=np.hstack([np.array(points), np.array(indexes)[:, np.newaxis]]), 
-            columns=["longitude", "latitude", "group_id"]
-        ).set_index(['group_id'])
+    def generate(self, indexes: List[int], points: List[Tuple[float, float]]):
 
-        partitioned_files = [f for f in os.listdir(Config.partitioned_climate_data_dir) if f[:-8] in list(Config.climate_data_param_names.keys())]
+        try:
+            group_point_df = pd.DataFrame(
+                data=np.hstack([np.array(points), np.array(indexes)[:, np.newaxis]]), 
+                columns=["longitude", "latitude", "group_id"]
+            ).set_index(['group_id'])
 
-        # TODO TODO TODO TODO TODO: I forgot what the column names were
+            dates = pd.date_range(start=Config.start_date, end=Config.end_date, freq="MS", inclusive="both")
 
-        total_df = pd.concat([
-            pd.read_parquet(
-                path=Config.partitioned_climate_data_dir + partitioned_file, 
-                engine="pyarrow"
-            ).set_index(['date', 'group_id'])
-            for partitioned_file in partitioned_files
-        ], axis=1)
+            parquet_writer = pq.ParquetWriter(where=Config.summary_dataset_filepath, schema=self.schema)
 
-        logging.info(total_df)
+            for date in dates:
+                logging.info(f"Concatenating files for month of {date}")
+                small_combined_df = pd.concat([
+                    pd.read_parquet(
+                        path=Config.partitioned_climate_data_dir + var_name + '_' + str(date.year) + '_' + str(date.month) + '.parquet', 
+                        engine="pyarrow"
+                    ).set_index(['date', 'group_id'])
+                    for var_name in list(Config.climate_data_param_names.keys())
+                ], axis=1)
 
-        final_df = total_df.join(other=group_point_df)
+                point_combined_df = small_combined_df.join(other=group_point_df)
 
-        logging.info(final_df)
+                point_combined_df.reset_index(drop=False, inplace=True)
+                point_combined_df.rename(columns={'date': 'timestamp'}, inplace=True)
+                
+                point_combined_df["season"] = point_combined_df.apply(get_astronomical_season_df, axis=1)
 
-        final_df.reset_index(drop=False, inplace=True)
-        final_df.rename(columns={'date': 'timestamp'}, inplace=True)   
-        
-        final_df["season"] = final_df.apply(get_astronomical_season_df, axis=1)
-        final_df["season"] = final_df["season"].astype("category")
+                # logging.info(small_combined_df)
 
-        final_df.to_parquet(path=Config.summary_dataset_filepath, engine='pyarrow', index=True)
+                batch_dict = dict()
+                batch_dict.update({
+                    "timestamp": pa.array(point_combined_df['timestamp'], type=pa.date64()),
+                    "group_id": pa.array(point_combined_df['group_id'], type=pa.int64()),
+                    "longitude": pa.array(point_combined_df['longitude'], type=pa.float64()),
+                    "latitude": pa.array(point_combined_df['latitude'], type=pa.float64()),
+                    "season": pa.array(point_combined_df['season'], type=pa.string()),
+                })
 
-        logging.info("Summary dataset created")
+                for var_name in self.climate_params:
+                    batch_dict.update({
+                        var_name[0]: pa.array(point_combined_df[var_name[0]], type=var_name[1]),
+                    })
+
+                batch_data = pa.table(batch_dict)
+
+                parquet_writer.write_table(batch_data)
+
+            parquet_writer.close()
+
+            logging.info("Summary dataset created")
+
+            logging.info(pd.read_parquet(path="db/summary_data.parquet", engine="pyarrow"))
+        except Exception as e:
+            logging.error(e)
 
     def clear_dataset(self):
-        os.remove(Config.summary_dataset_filepath)
+        empty_table = pa.Table.from_batches([], schema=self.schema)
+
+        # Write empty Parquet file
+        pq.write_table(empty_table, Config.summary_dataset_filepath)
+
 
 
 

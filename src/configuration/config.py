@@ -44,15 +44,15 @@ class Config:
 
     ### summary dataset
 
-    generate_summary_dataset = True # main driver for summary dataset
+    generate_summary_dataset = False # main driver for summary dataset
     recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
 
     ### ML model
 
-    activate_tft = False
+    activate_tft = True
     benchmark_tft = False
     tune_hyperparams_tft = False
-    train_tft = False
+    train_tft = True
     test_tft = False
     tft_accelerator: Literal['cpu', 'gpu', 'tpu', 'auto'] = 'cpu' 
     tft_validation_workers = 0 # max 8 if gpu is used; 0 if cpu

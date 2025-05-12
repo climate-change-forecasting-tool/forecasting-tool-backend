@@ -57,20 +57,32 @@ class TFTransformer:
                 )
             })
 
-        self.unknown_climate_reals: List[str] = []
-        for climate_var_name in list(Config.climate_data_param_names.keys()):
-            for modifier in ['min', 'mean', 'max']: # ['min', 'mean', 'max']
-                self.unknown_climate_reals.append(climate_var_name + '_' + modifier)
-
-        self.unknown_climate_reals.remove('lsm_min')
-        self.unknown_climate_reals.remove('lsm_max')
+        self.unknown_climate_reals: List[str] = [
+            't2m_min', 
+            't2m_mean', 
+            't2m_max', 
+            'u10_min', 
+            'u10_mean', 
+            'u10_max', 
+            'v10_min', 
+            'v10_mean', 
+            'v10_max', 
+            'lsm_mean', 
+            'sp_mean', 
+            'aod550_max', 
+            'tc_ch4_max', 
+            'tcno2_max', 
+            'gtco3_max', 
+            'tcso2_max', 
+            'tcwv_max'
+        ]
         
         self.unknown_climate_reals = list(set(self.unknown_climate_reals).difference(self.continuous_targets))
         
         df['season'] = df['season'].astype('category')
 
         df['timestamp'] = pd.to_datetime(df['timestamp'])
-        df['timestamp'] = (df['timestamp'] - df['timestamp'].min()).dt.astype(int)
+        df['timestamp'] = (df['timestamp'] - df['timestamp'].min()).dt.days.astype(int)
 
         logging.info(df)
         
@@ -80,7 +92,7 @@ class TFTransformer:
         # splitting by date
         df.drop(['longitude', 'latitude'], axis=1, inplace=True)
 
-        df.sort_values("timestamp").groupby("group_id") # inplace = True ?
+        df.sort_values(by="timestamp", inplace=True)
 
         logging.info("Sorted and grouped:")
         logging.info(df)
@@ -103,13 +115,14 @@ class TFTransformer:
         self.val_df[self.unknown_climate_reals] = scaler.transform(self.val_df[self.unknown_climate_reals])
         self.test_df[self.unknown_climate_reals] = scaler.transform(self.test_df[self.unknown_climate_reals])
 
-        logging.info(self.train_df)
-        logging.info(self.val_df)
-        logging.info(self.test_df)
+        # logging.info("The datasets:")
+        # logging.info(self.train_df)
+        # logging.info(self.val_df)
+        # logging.info(self.test_df)
 
         # Define max prediction & history length
-        self.max_prediction_length = 5   # Forecast next 'x' days; 14
-        self.max_encoder_length = 10     # Use past 'x' days for prediction; 365
+        self.max_prediction_length = 14   # Forecast next 'x' days; 14
+        self.max_encoder_length = 365     # Use past 'x' days for prediction; 365
 
         if Config.benchmark_tft:
             logging.info("Benchmark:")
@@ -485,7 +498,7 @@ class TFTransformer:
         # logging.info("Denormalized output:")
         # logging.info(raw_output)
 
-        x = raw_predictions.x
+        # x = raw_predictions.x
 
         predictions = {}
     
@@ -494,13 +507,13 @@ class TFTransformer:
             denormalized_pred = np.array(raw_output[idx].cpu())
             
             # Get the normalizer for this target
-            normalizer: GroupNormalizer = self.normalizers[target]
+            # normalizer: GroupNormalizer = self.normalizers[target]
             
             # Extract scale and offset from x (these are added by add_target_scales=True)
-            target_scale = np.array(x["target_scale"][idx].cpu()).flatten()
+            # target_scale = np.array(x["target_scale"][idx].cpu()).flatten()
 
-            scale = target_scale[1]
-            offset = target_scale[0]
+            # scale = target_scale[1]
+            # offset = target_scale[0]
 
             # logging.info(f"Scale: {scale} | offset: {offset}")
 

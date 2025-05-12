@@ -21,18 +21,18 @@ class Prober:
 if __name__ == '__main__':
     # p = Prober(grib_filename="data/climate_data/total_column_ozone_2003_1.grib")
 
-    file = pd.read_parquet(path="db/partitioned_data/total_column_water_vapour.parquet", engine="pyarrow")
+    file = pd.read_parquet(path="db/summary_data.parquet", engine="pyarrow")
 
     # logging.info(file['date'].max())
 
-    file['date'] = pd.to_datetime(file['date'])
+    # file['date'] = pd.to_datetime(file['date'])
     # file['date'] = pd.to_datetime(file['date'], format="%Y/%m/%d")
 
     # file.groupby(['group_id', 'date'])
 
-    logging.info(file[file['date'] > datetime(2024, 9, 30)])
+    # logging.info(file[file['date'] > datetime(2024, 9, 30)])
 
-    file.set_index(['date'], inplace=True)
+    # file.set_index(['date'], inplace=True)
 
     logging.info(file)
 
