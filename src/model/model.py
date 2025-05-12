@@ -297,7 +297,7 @@ class TFTransformer:
             digested_dict = dict()
 
             for index, row in digested_df.iterrows():
-                digested_dict.update({index: row['t2m_mean_median']})
+                digested_dict.update({str(index): str(row['t2m_mean_median'])})
 
             return digested_dict
         except Exception as e:
