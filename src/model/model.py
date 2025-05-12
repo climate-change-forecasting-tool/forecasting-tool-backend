@@ -1,26 +1,19 @@
-import pickle
 from typing import List
 import h3
 import pandas as pd
 import numpy as np
-from pytorch_forecasting import NaNLabelEncoder, TemporalFusionTransformer, TimeSeriesDataSet, QuantileLoss, RMSE, Baseline, GroupNormalizer
-import torch.nn as nn
+from pytorch_forecasting import NaNLabelEncoder, TemporalFusionTransformer, TimeSeriesDataSet, GroupNormalizer, QuantileLoss
 from sklearn.preprocessing import StandardScaler
 import lightning.pytorch as pl
-import matplotlib.pyplot as plt
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
-from lightning.pytorch.loggers import TensorBoardLogger
 import torch
 from src.configuration.config import Config
-import os
 from datetime import timedelta
+
 
 import logging
 logging.basicConfig(level=logging.INFO)
 import warnings
 warnings.filterwarnings("ignore") 
-import optuna
-optuna.logging.set_verbosity(verbosity=optuna.logging.INFO)
 
 from src.utility import latlon_to_xyz, get_astronomical_season
 
@@ -28,17 +21,8 @@ class TFTransformer:
     def __init__(self):
         df = pd.read_parquet(path=Config.summary_dataset_filepath, engine="pyarrow")
 
-        self.checkpoint_callback = ModelCheckpoint(
-            dirpath="checkpoints/",
-            filename="{epoch}-{val_loss:.2f}",
-            monitor="val_loss",
-            mode="min",
-            save_top_k=1,
-            verbose=True
-        )
-
         self.target = 't2m_mean'
-        
+
         # Defining loss metrics and normalizers for targets
         self.loss_metrics = QuantileLoss(
             quantiles=[0.1, 0.5, 0.9]
@@ -98,6 +82,12 @@ class TFTransformer:
         self.data_means = scaler.mean_
         self.data_stds = scaler.var_
 
+        # logging.info("Means")
+        # logging.info(self.data_means)
+        # logging.info("Vars")
+        # logging.info(self.data_stds)
+
+        self.train_df[self.unknown_climate_reals] = scaler.transform(self.train_df[self.unknown_climate_reals])
         self.val_df[self.unknown_climate_reals] = scaler.transform(self.val_df[self.unknown_climate_reals])
         self.test_df[self.unknown_climate_reals] = scaler.transform(self.test_df[self.unknown_climate_reals])
 
@@ -105,7 +95,7 @@ class TFTransformer:
         self.max_prediction_length = 14   # Forecast next 'x' days; 14
         self.max_encoder_length = 365     # Use past 'x' days for prediction; 365
 
-        self.tft = self.load_best_model(checkpoint_path=Config.tft_checkpoint_path)
+        self.tft = self.load_best_model()
 
     def prepare_multi_target_dataset(
         self, 
@@ -139,38 +129,31 @@ class TFTransformer:
         )
         return tsds
 
-    def load_best_model(self, checkpoint_path=None):
+    def load_best_model(self):
         """
-        Load the best model from a checkpoint
-        Parameters:  checkpoint_path : str, optional
-            Path to a specific checkpoint file. If None, attempts to find the best checkpoint
-            from the trainer if training has occurred.
-        Returns: The loaded model
+        Save on machine with CUDA GPU with the following:
+
+        def model_to_cpu(self, checkpoint_path):
+            checkpoint_model = TemporalFusionTransformer.load_from_checkpoint(
+                checkpoint_path=checkpoint_path, 
+                map_location=torch.device("cpu")
+            )
+
+            new_checkpoint_path = "checkpoints/model.ckpt"
+            torch.save(checkpoint_model, new_checkpoint_path)
+
         """
-        if checkpoint_path is None:
-            logging.info("Trying to get best model from checkpoints folder...")
-            # Get all .ckpt files
-            ckpt_files = [f for f in os.listdir("checkpoints") if f.endswith(".ckpt")]
 
-            # Sort by val_loss parsed from filename
-            ckpt_files.sort(key=lambda f: float(f.split("val_loss=")[-1].replace(".ckpt", "")))
-
-            # Select best
-            best_checkpoint = ckpt_files[0]
-            checkpoint_path = os.path.join("checkpoints", best_checkpoint)
-
-        if checkpoint_path is None:
-            logging.info("Trying to get best model from predefined path...")
-            checkpoint_path = Config.tft_checkpoint_path
-        
-        # Verify the checkpoint file exists
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_path}")
+        checkpoint_path = Config.tft_checkpoint_path
         
         logging.info(f"Using best model from: {checkpoint_path}")
 
-        # Load the model
-        best_tft = TemporalFusionTransformer.load_from_checkpoint(checkpoint_path)
+        best_tft: TemporalFusionTransformer = torch.load(
+            checkpoint_path, 
+            map_location=torch.device("cpu"),
+            weights_only=False
+        )
+        best_tft.eval()
 
         return best_tft
 
@@ -300,17 +283,8 @@ class TFTransformer:
                 )
             ) + 1
 
-            # location_df = pd.read_parquet(
-            #     path=Config.summary_dataset_filepath, 
-            #     engine="pyarrow",
-            #     filters=[('group_id', '==', group_id)]
-            # )
-
-            location_df = pd.concat([self.train_df, self.val_df])
-
+            location_df = pd.concat([self.train_df, self.val_df, self.test_df])
             location_df = location_df[location_df['group_id'] == group_id]
-
-            logging.info(location_df)
 
             prediction_df = self.predict(location_data=location_df)
 

@@ -21,7 +21,7 @@ class Config:
     ### filepaths
 
     summary_dataset_filepath = "db/summary_data.parquet"
-    tft_checkpoint_path = "checkpoints/output_transformer.pkl"
+    tft_checkpoint_path = "checkpoints/model.ckpt"
 
     ### point generation
 
