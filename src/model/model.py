@@ -286,12 +286,20 @@ class TFTransformer:
             location_df = pd.concat([self.train_df, self.val_df, self.test_df])
             location_df = location_df[location_df['group_id'] == group_id]
 
+            if len(location_df) < self.max_encoder_length:
+                raise Exception("Bad group id.")
+
             prediction_df = self.predict(location_data=location_df)
 
             # convert Kelvin to Fahrenheit
             digested_df = (prediction_df - 273.15) * 9./5. + 32.
 
-            return digested_df
+            digested_dict = dict()
+
+            for index, row in digested_df.iterrows():
+                digested_dict.update({index: row['t2m_mean_median']})
+
+            return digested_dict
         except Exception as e:
             raise e
 
