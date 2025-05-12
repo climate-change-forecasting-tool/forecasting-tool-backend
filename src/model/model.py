@@ -38,24 +38,16 @@ class TFTransformer:
             verbose=True
         )
 
-        self.continuous_targets = ['t2m_mean']
+        self.target = 't2m_mean'
         
         # Defining loss metrics and normalizers for targets
-        self.loss_metrics = dict()
-        self.normalizers = dict()
-
-        for target in self.continuous_targets:
-            self.loss_metrics.update({
-                target: QuantileLoss(
-                    quantiles=[0.1, 0.5, 0.9]
-                )
-            })
-            self.normalizers.update({
-                target: GroupNormalizer(
-                    groups=['group_id'],
-                    method="standard"
-                )
-            })
+        self.loss_metrics = QuantileLoss(
+            quantiles=[0.1, 0.5, 0.9]
+        )
+        self.normalizers = GroupNormalizer(
+            groups=['group_id'],
+            method="standard"
+        )
 
         self.unknown_climate_reals: List[str] = [
             't2m_min', 
@@ -77,14 +69,14 @@ class TFTransformer:
             'tcwv_max'
         ]
         
-        self.unknown_climate_reals = list(set(self.unknown_climate_reals).difference(self.continuous_targets))
+        self.unknown_climate_reals = list(set(self.unknown_climate_reals).difference([self.target]))
         
         df['season'] = df['season'].astype('category')
 
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df['timestamp'] = (df['timestamp'] - df['timestamp'].min()).dt.days.astype(int)
 
-        logging.info(df)
+        # logging.info(df)
         
         # make longitude and latitude learnable
         df['x'], df['y'], df['z'] = latlon_to_xyz(df['latitude'], df['longitude'])
@@ -93,9 +85,6 @@ class TFTransformer:
         df.drop(['longitude', 'latitude'], axis=1, inplace=True)
 
         df.sort_values(by="timestamp", inplace=True)
-
-        logging.info("Sorted and grouped:")
-        logging.info(df)
 
         #training and validation set for model
         max_datapoints = df['timestamp'].max()
@@ -169,18 +158,10 @@ class TFTransformer:
         predict_mode=False
     ):
 
-        # # Create a MultiNormalizer for the targets
-        # target_normalizer = MultiNormalizer(
-        #     # Order of dict.values() is preserved
-        #     normalizers=list(self.normalizers.values())
-        # )
-
-        target_normalizer = list(self.normalizers.values())[0]
-
         tsds = TimeSeriesDataSet(
             data,
             time_idx='timestamp',
-            target=self.continuous_targets[0],
+            target=self.target,
             group_ids=['group_id'],  # Group by location for multi-region modeling
             min_encoder_length=max_encoder_length,
             max_encoder_length=max_encoder_length,
@@ -188,8 +169,8 @@ class TFTransformer:
             time_varying_known_categoricals=['season'],
             static_reals=['x','y','z'],  # Static features
             time_varying_known_reals=['timestamp'], # season?
-            time_varying_unknown_reals=self.continuous_targets + self.unknown_climate_reals,
-            target_normalizer = target_normalizer,
+            time_varying_unknown_reals=[self.target] + self.unknown_climate_reals,
+            target_normalizer = self.normalizers,
             categorical_encoders={
                 "season": NaNLabelEncoder().fit(data["season"])
             },
@@ -247,13 +228,6 @@ class TFTransformer:
             logger=logger,
         )
 
-        # loss = MultiLoss(
-        #     # Order of dict.values() is preserved
-        #     metrics=list(self.loss_metrics.values())
-        # )
-
-        loss = list(self.loss_metrics.values())[0]
-
         tft = TemporalFusionTransformer.from_dataset(
             train_dataset,
             learning_rate=learning_rate,
@@ -261,7 +235,7 @@ class TFTransformer:
             attention_head_size=4,
             dropout=0.1,
             hidden_continuous_size=8,
-            loss=loss,
+            loss=self.loss_metrics,
             log_interval=10,  # uncomment for learning rate finder and otherwise, e.g. to 10 for logging every 10 batches
             optimizer="ranger",
             reduce_on_plateau_patience=4,
@@ -461,10 +435,10 @@ class TFTransformer:
             'z': [encoder_data['z'].iloc[0]] * prediction_length,
         }
 
-        for col in self.continuous_targets + self.unknown_climate_reals:
+        for col in [self.target] + self.unknown_climate_reals:
             decoder_data[col] = [0.] * prediction_length
 
-        future_datetimes = [Config.start_date + timedelta(days=d) for d in future_timestamps]
+        future_datetimes = [Config.start_date + timedelta(days=float(d)) for d in future_timestamps]
         decoder_data['season'] = [
             get_astronomical_season(
                 date=future_dt, 
@@ -503,9 +477,12 @@ class TFTransformer:
         predictions = {}
     
         # Extract and denormalize continuous targets
-        for idx, target in enumerate(self.continuous_targets):
+        for idx, target in enumerate([self.target]):
             denormalized_pred = np.array(raw_output[idx].cpu())
             
+            logging.info("Denormalized")
+            logging.info(denormalized_pred)
+
             # Get the normalizer for this target
             # normalizer: GroupNormalizer = self.normalizers[target]
             
@@ -533,45 +510,56 @@ class TFTransformer:
         return predictions_df
         
     def predict_test(self):
-        group_id = self.train_df.iloc[0]['group_id']
+        # group_id = self.train_df.iloc[0]['group_id']
 
-        prev_df = pd.concat([self.train_df, self.val_df])
-        prev_df = prev_df[prev_df['group_id'] == group_id]
-        results = self.predict(location_data=prev_df)
+        # prev_df = pd.concat([self.train_df, self.val_df])
+        # prev_df = prev_df[prev_df['group_id'] == group_id]
+        # results = self.predict(location_data=prev_df)
 
-        logging.info("results:")
+        # logging.info("results:")
+        # logging.info(results)
+
+        # analysis_df = self.test_df.copy()
+        # analysis_df = analysis_df[analysis_df['group_id'] == group_id]
+        # df_to_analyze = self.test_df.head(self.max_prediction_length)
+
+        # results = self.predict_and_digest(longitude=38.027955, latitude=79.251775)
+        results = self.predict_and_digest(longitude=-74.006, latitude=40.7128)
+
         logging.info(results)
 
-        analysis_df = self.test_df.copy()
-        analysis_df = analysis_df[analysis_df['group_id'] == group_id]
-        df_to_analyze = self.test_df.head(self.max_prediction_length)
-
-
-
-        pass
-
+        return results
         
-        
-    # TODO: not working yet
+    
     def predict_and_digest(self, longitude: float, latitude: float):
+        """
+        Call this function for the routing point model query
+        """
         group_id = h3.str_to_int(
             h3.latlng_to_cell(
                 lat=latitude, 
                 lng=longitude, 
                 res=Config.hexagon_resolution
             )
-        )
+        ) + 1
 
-        location_df = pd.read_parquet(
-            path=Config.summary_dataset_filepath, 
-            engine="pyarrow",
-            filters=[('group_id', '==', group_id)]
-        )
+        # location_df = pd.read_parquet(
+        #     path=Config.summary_dataset_filepath, 
+        #     engine="pyarrow",
+        #     filters=[('group_id', '==', group_id)]
+        # )
+
+        location_df = pd.concat([self.train_df, self.val_df])
+
+        location_df = location_df[location_df['group_id'] == group_id]
+
+        logging.info(location_df)
 
         prediction_df = self.predict(location_data=location_df)
 
-        digested_df = pd.DataFrame({'t2m_mean': prediction_df['t2m_mean_median']})
+        # convert Kelvin to Fahrenheit
+        digested_df = (prediction_df - 273.15) * 9./5. + 32.
 
-        return prediction_df
+        return digested_df
 
 

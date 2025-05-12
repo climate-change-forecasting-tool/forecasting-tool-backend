@@ -2,10 +2,9 @@ import csv
 from datetime import datetime
 
 from .configuration.config import Config
-import logging
-
 from .datamodels import PointGenerationModel, SummaryDataset
 
+import logging
 logging.basicConfig(level=logging.INFO)
 
 """
