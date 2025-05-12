@@ -6,7 +6,7 @@ from sklearn.preprocessing import StandardScaler
 import lightning.pytorch as pl
 import matplotlib.pyplot as plt
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
-from lightning.pytorch.loggers import TensorBoardLogger
+# from lightning.pytorch.loggers import TensorBoardLogger
 import torch
 from src.configuration.config import Config
 import os
@@ -212,7 +212,7 @@ class TFTransformer:
         )
         # lr_logger = LearningRateMonitor()  # log learning rate
         
-        logger = TensorBoardLogger("lightning_logs")
+        # logger = TensorBoardLogger("lightning_logs")
 
         trainer = pl.Trainer(
             max_epochs=max_epochs,
@@ -222,7 +222,7 @@ class TFTransformer:
             limit_train_batches=50,  # comment in for training, running valiation every 30 batches
             # fast_dev_run=True,
             callbacks=[early_stop_callback, self.checkpoint_callback],  # Added checkpoint_callback here
-            logger=logger,
+            # logger=logger,
         )
 
         tft = TemporalFusionTransformer.from_dataset(
