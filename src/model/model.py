@@ -74,8 +74,6 @@ class TFTransformer:
 
         df['timestamp'] = pd.to_datetime(df['timestamp'])
         df['timestamp'] = (df['timestamp'] - df['timestamp'].min()).dt.days.astype(int)
-
-        # logging.info(df)
         
         # make longitude and latitude learnable
         df['x'], df['y'], df['z'] = latlon_to_xyz(df['latitude'], df['longitude'])
@@ -103,51 +101,11 @@ class TFTransformer:
         self.val_df[self.unknown_climate_reals] = scaler.transform(self.val_df[self.unknown_climate_reals])
         self.test_df[self.unknown_climate_reals] = scaler.transform(self.test_df[self.unknown_climate_reals])
 
-        # logging.info("The datasets:")
-        # logging.info(self.train_df)
-        # logging.info(self.val_df)
-        # logging.info(self.test_df)
-
         # Define max prediction & history length
         self.max_prediction_length = 14   # Forecast next 'x' days; 14
         self.max_encoder_length = 365     # Use past 'x' days for prediction; 365
 
-        if Config.benchmark_tft:
-            logging.info("Benchmark:")
-            self.get_benchmark(
-                training_dataframe=self.train_df,
-                validation_dataframe=self.val_df,
-                batch_size=128
-            )
-
-        ###### HYPERPARAMETER TUNING
-        if Config.tune_hyperparams_tft:
-            logging.info("Hyperparameter tuning:")
-            self.tune_hyperparameters(
-                training_dataframe=self.train_df,
-                validation_dataframe=self.val_df,
-                batch_size=128,
-            )
-
-        ##### TRAINING
-        if Config.train_tft:
-            logging.info("Training:")
-            self.train(
-                training_dataframe=self.train_df,
-                validation_dataframe=self.val_df,
-                hidden_size=32, # 32
-                learning_rate=0.03,
-                batch_size=128,
-                max_epochs=1000,
-                patience=25
-            )
-
-        if Config.test_tft:
-            logging.info("Predicting test data:")
-            self.predict_test()
-
-        ##### PERFORMANCE EVALUATION
-        # self.eval_performance()
+        self.tft = self.load_best_model(checkpoint_path=Config.tft_checkpoint_path)
 
     def prepare_multi_target_dataset(
         self, 
@@ -181,74 +139,6 @@ class TFTransformer:
         )
         return tsds
 
-    def train(
-        self,
-        training_dataframe: pd.DataFrame, 
-        validation_dataframe: pd.DataFrame = None, 
-        hidden_size=32, 
-        learning_rate=0.03, 
-        batch_size=32, 
-        max_epochs=50,
-        patience=10,
-    ):
-        train_dataset = self.prepare_multi_target_dataset(
-            training_dataframe,
-            max_encoder_length=self.max_encoder_length,
-            max_prediction_length=self.max_prediction_length,
-            predict_mode=False
-        )
-
-        val_dataset = self.prepare_multi_target_dataset(
-            pd.concat([training_dataframe, validation_dataframe]),
-            max_encoder_length=self.max_encoder_length,
-            max_prediction_length=self.max_prediction_length,
-            predict_mode=True
-        )
-
-        train_loader = train_dataset.to_dataloader(train=True, batch_size=batch_size, num_workers=Config.tft_training_workers)
-        val_loader = val_dataset.to_dataloader(train=False, batch_size=batch_size, num_workers=Config.tft_validation_workers)
-
-        # Setup trainer
-        early_stop_callback = EarlyStopping(
-            monitor="val_loss", min_delta=1e-4, patience=patience, verbose=False, mode="min"
-        )
-        # lr_logger = LearningRateMonitor()  # log learning rate
-        
-        logger = TensorBoardLogger("lightning_logs")
-
-        trainer = pl.Trainer(
-            max_epochs=max_epochs,
-            accelerator=Config.tft_accelerator,
-            enable_model_summary=True,
-            gradient_clip_val=0.1,
-            limit_train_batches=50,  # comment in for training, running valiation every 30 batches
-            # fast_dev_run=True,
-            callbacks=[early_stop_callback, self.checkpoint_callback],  # Added checkpoint_callback here
-            logger=logger,
-        )
-
-        tft = TemporalFusionTransformer.from_dataset(
-            train_dataset,
-            learning_rate=learning_rate,
-            hidden_size=hidden_size,
-            attention_head_size=4,
-            dropout=0.1,
-            hidden_continuous_size=8,
-            loss=self.loss_metrics,
-            log_interval=10,  # uncomment for learning rate finder and otherwise, e.g. to 10 for logging every 10 batches
-            optimizer="ranger",
-            reduce_on_plateau_patience=4,
-        )
-        logging.info(f"Number of parameters in network: {tft.size() / 1e3:.1f}k")
-
-        trainer.fit(
-            tft,
-            train_dataloaders=train_loader,
-            val_dataloaders=val_loader,
-        )
-        # with open("checkpoints/output_transformer.pkl", "wb") as f:
-        #     pickle.dump(self.tft.output_transformer, f)
-
     def load_best_model(self, checkpoint_path=None):
         """
         Load the best model from a checkpoint
@@ -279,119 +169,10 @@ class TFTransformer:
         
         logging.info(f"Using best model from: {checkpoint_path}")
 
-        device = None
-        if Config.tft_accelerator == 'cpu':
-            device = torch.device('cpu')
-
-            checkpoint = torch.load(checkpoint_path, map_location=torch.device('cpu'), weights_only=False)
-        elif Config.tft_accelerator == 'gpu':
-            device = torch.device('cuda:0') # fix if using gpu; you need to map to all gpus probably
-        else:
-            raise Exception("Accelerator device error")
-        
-        logging.info(f"Loading checkpoint tft onto: {device.type}")
-
         # Load the model
-        best_tft = TemporalFusionTransformer.load_from_checkpoint(checkpoint_path, map_location=torch.device("cpu") if not torch.cuda.is_available() else None)
-        
-        if Config.tft_accelerator == 'cpu':
-            best_tft.eval()
+        best_tft = TemporalFusionTransformer.load_from_checkpoint(checkpoint_path)
 
         return best_tft
-    
-    def tune_hyperparameters(
-        self,
-        training_dataframe: pd.DataFrame, 
-        validation_dataframe: pd.DataFrame = None, 
-        batch_size=32,
-        n_trials = 200, 
-        max_epochs=50,
-    ):
-        ###### hyperparameter tuning
-        import pickle
-        from pytorch_forecasting.models.temporal_fusion_transformer.tuning import optimize_hyperparameters
-
-        training_data = self.prepare_multi_target_dataset(
-            training_dataframe,
-            max_encoder_length=self.max_encoder_length,
-            max_prediction_length=self.max_prediction_length,
-            predict_mode=False
-        )
-
-        validation_data = self.prepare_multi_target_dataset(
-            pd.concat([training_dataframe, validation_dataframe]),
-            max_encoder_length=self.max_encoder_length,
-            max_prediction_length=self.max_prediction_length,
-            predict_mode=True
-        )
-
-        train_loader = training_data.to_dataloader(train=True, batch_size=batch_size, num_workers=Config.tft_training_workers)
-        val_loader = validation_data.to_dataloader(train=False, batch_size=batch_size, num_workers=Config.tft_validation_workers)
-
-        # create study
-        study = optimize_hyperparameters(
-            train_loader,
-            val_loader,
-            model_path="optuna_test",
-            n_trials=n_trials,
-            max_epochs=max_epochs,
-            gradient_clip_val_range=(0.01, 1.0),
-            hidden_size_range=(8, 128),
-            hidden_continuous_size_range=(8, 128),
-            attention_head_size_range=(1, 4),
-            learning_rate_range=(0.001, 0.1),
-            dropout_range=(0.1, 0.3),
-            trainer_kwargs=dict(limit_train_batches=30, enable_progress_bar=True),
-            reduce_on_plateau_patience=4,
-            use_learning_rate_finder=False,  # Optuna for analyzing ideal learning rate or use in-built learning rate finder
-            verbose=True
-        )
-
-        # save study results - also we can resume tuning at a later point in time
-        with open("test_study.pkl", "wb") as fout:
-            pickle.dump(study, fout)
-
-        # show best hyperparameters
-        logging.info(study.best_trial.params)
-
-    def get_benchmark(
-        self, 
-        training_dataframe: pd.DataFrame,
-        validation_dataframe: pd.DataFrame = None,
-        batch_size=32,
-    ):
-        val_dataset = self.prepare_multi_target_dataset(
-            pd.concat([training_dataframe, validation_dataframe]),
-            max_encoder_length=self.max_encoder_length,
-            max_prediction_length=self.max_prediction_length,
-            predict_mode=True
-        )
-        val_loader = val_dataset.to_dataloader(train=False, batch_size=batch_size, num_workers=Config.tft_validation_workers)
-        
-        baseline_predictions = Baseline().predict(val_loader, return_y=True)
-        logging.info(baseline_predictions)
-        logging.info(RMSE()(baseline_predictions.output, baseline_predictions.y))
-
-    def eval_performance(
-        self, 
-        training_dataframe: pd.DataFrame,
-        validation_dataframe: pd.DataFrame = None,
-        batch_size = 32,
-    ):
-        best_tft = self.load_best_model()
-
-        val_dataset = self.prepare_multi_target_dataset(
-            pd.concat([training_dataframe, validation_dataframe]),
-            max_encoder_length=self.max_encoder_length,
-            max_prediction_length=self.max_prediction_length,
-            predict_mode=True
-        )
-        val_loader = val_dataset.to_dataloader(train=False, batch_size=batch_size, num_workers=Config.tft_validation_workers)
-        
-        predictions = best_tft.predict(
-            val_loader, return_y=True, trainer_kwargs=dict(accelerator=Config.tft_accelerator)
-        )
-        logging.info(RMSE()(predictions.output, predictions.y))
 
     # TODO: test and fix
     def predict(self, location_data: pd.DataFrame, prediction_length: int = None):
@@ -418,9 +199,6 @@ class TFTransformer:
         
         # Get the most recent data for encoding context
         encoder_data = location_data.tail(self.max_encoder_length).copy()
-
-        # Load the best model
-        best_tft = self.load_best_model()
 
         # Create future timestamps for prediction
         last_timestamp = encoder_data['timestamp'].max()
@@ -460,7 +238,7 @@ class TFTransformer:
 
         dataloader = tsds.to_dataloader(train=False, batch_size=128, num_workers=Config.tft_validation_workers)
         
-        raw_predictions = best_tft.predict(
+        raw_predictions = self.tft.predict(
             dataloader, # or tsds
             mode="raw",
             return_x=True, 
@@ -468,33 +246,12 @@ class TFTransformer:
         )
 
         raw_output = raw_predictions.output.prediction
-        # logging.info("Denormalized output:")
-        # logging.info(raw_output)
-
-        # x = raw_predictions.x
 
         predictions = {}
     
         # Extract and denormalize continuous targets
         for idx, target in enumerate([self.target]):
             denormalized_pred = np.array(raw_output[idx].cpu())
-            
-            logging.info("Denormalized")
-            logging.info(denormalized_pred)
-
-            # Get the normalizer for this target
-            # normalizer: GroupNormalizer = self.normalizers[target]
-            
-            # Extract scale and offset from x (these are added by add_target_scales=True)
-            # target_scale = np.array(x["target_scale"][idx].cpu()).flatten()
-
-            # scale = target_scale[1]
-            # offset = target_scale[0]
-
-            # logging.info(f"Scale: {scale} | offset: {offset}")
-
-            # logging.info("Normalized:")
-            # logging.info((denormalized_pred - offset) / scale)
 
             denormalized_pred = np.sort(denormalized_pred, axis=1)
 
@@ -534,31 +291,34 @@ class TFTransformer:
         """
         Call this function for the routing point model query
         """
-        group_id = h3.str_to_int(
-            h3.latlng_to_cell(
-                lat=latitude, 
-                lng=longitude, 
-                res=Config.hexagon_resolution
-            )
-        ) + 1
+        try:
+            group_id = h3.str_to_int(
+                h3.latlng_to_cell(
+                    lat=latitude, 
+                    lng=longitude, 
+                    res=Config.hexagon_resolution
+                )
+            ) + 1
 
-        # location_df = pd.read_parquet(
-        #     path=Config.summary_dataset_filepath, 
-        #     engine="pyarrow",
-        #     filters=[('group_id', '==', group_id)]
-        # )
+            # location_df = pd.read_parquet(
+            #     path=Config.summary_dataset_filepath, 
+            #     engine="pyarrow",
+            #     filters=[('group_id', '==', group_id)]
+            # )
 
-        location_df = pd.concat([self.train_df, self.val_df])
+            location_df = pd.concat([self.train_df, self.val_df])
 
-        location_df = location_df[location_df['group_id'] == group_id]
+            location_df = location_df[location_df['group_id'] == group_id]
 
-        logging.info(location_df)
+            logging.info(location_df)
 
-        prediction_df = self.predict(location_data=location_df)
+            prediction_df = self.predict(location_data=location_df)
 
-        # convert Kelvin to Fahrenheit
-        digested_df = (prediction_df - 273.15) * 9./5. + 32.
+            # convert Kelvin to Fahrenheit
+            digested_df = (prediction_df - 273.15) * 9./5. + 32.
 
-        return digested_df
+            return digested_df
+        except Exception as e:
+            raise e
 
 

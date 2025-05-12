@@ -15,21 +15,23 @@ if __name__ == '__main__':
     @app.route("/predict", methods=["POST"])
     def predict():
         print("DEBUG: predict called")
+        try:
+            req_data = request.get_json(force=True, silent=True)
 
-        req_data = request.get_json(force=True, silent=True)
+            if req_data and req_data.get('longitude') and req_data.get('latitude'):
+                longitude = float(req_data.get('longitude'))
+                latitude = float(req_data.get('latitude'))
+            else:
+                return jsonify({"ok": False, "error": "Invalid input."}), 422
 
-        if req_data and req_data.get('longitude') and req_data.get('latitude'):
-            longitude = float(req_data.get('longitude'))
-            latitude = float(req_data.get('latitude'))
-        else:
-            return jsonify({"ok": False, "error": "Invalid input."}), 422
+            results = model.predict_and_digest(
+                longitude=longitude,
+                latitude=latitude
+            )
 
-        results = model.predict_and_digest(
-            longitude=longitude,
-            latitude=latitude
-        )
-
-        return jsonify(results), 200
+            return jsonify(results), 200
+        except Exception as e:
+            return jsonify({"ok": False, "error": str(e)}), 500
     
     print("Starting Flask app")
     print(f"Registered routes: {app.url_map}")
