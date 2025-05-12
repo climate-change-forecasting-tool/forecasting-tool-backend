@@ -52,8 +52,8 @@ class Config:
     activate_tft = True
     benchmark_tft = False
     tune_hyperparams_tft = False
-    train_tft = False
-    test_tft = True
+    train_tft = True
+    test_tft = False
     tft_accelerator: Literal['cpu', 'gpu', 'tpu', 'auto'] = 'cpu' 
     tft_validation_workers = 0 # max 8 if gpu is used; 0 if cpu
     tft_training_workers = 0 # max 4 if gpu is used; 0 if cpu
