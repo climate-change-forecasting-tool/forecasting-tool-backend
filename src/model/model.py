@@ -3,14 +3,13 @@ from typing import List
 import h3
 import pandas as pd
 import numpy as np
-from pytorch_forecasting import NaNLabelEncoder, TemporalFusionTransformer, TimeSeriesDataSet, QuantileLoss, RMSE, Baseline, GroupNormalizer, MultiLoss
+from pytorch_forecasting import NaNLabelEncoder, TemporalFusionTransformer, TimeSeriesDataSet, QuantileLoss, RMSE, Baseline, GroupNormalizer
 import torch.nn as nn
 from sklearn.preprocessing import StandardScaler
 import lightning.pytorch as pl
 import matplotlib.pyplot as plt
 from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint, LearningRateMonitor
 from lightning.pytorch.loggers import TensorBoardLogger
-from pytorch_forecasting.data.encoders import MultiNormalizer
 import torch
 from src.configuration.config import Config
 import os

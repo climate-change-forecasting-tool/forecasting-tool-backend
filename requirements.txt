@@ -1,3 +1,5 @@
+--extra-index-url https://download.pytorch.org/whl/cu121
+
 numpy==1.26.4
 requests==2.32.3
 pandas==2.2.2
@@ -10,19 +12,13 @@ pytorch_optimizer==3.4.0
 optuna==4.2.0
 statsmodels==0.14.4
 optuna-integration==4.2.1
-geopandas==1.0.1
 openpyxl==3.1.5
 pyarrow==19.0.0
 fastparquet==2024.11.0
 matplotlib==3.9.0
 python-dotenv==1.0.1
 h3==4.2.2
-rtree==1.4.0
 joblib
-cdsapi
-xarray
-cartopy
-netCDF4
-cfgrib
-eccodes
-dotenv
+rtree==1.4.0
+flask==3.0.3
+flask-cors==3.0.10

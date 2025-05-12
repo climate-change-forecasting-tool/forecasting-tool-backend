@@ -20,40 +20,23 @@ class Config:
 
     ### filepaths
 
-    landmass_filepath = "data/ne_10m_land"
-
-    climate_grib_output_dir = "data/climate_data/"
-    partitioned_climate_data_dir = "db/partitioned_data/"
-
     summary_dataset_filepath = "db/summary_data.parquet"
     tft_checkpoint_path = "checkpoints/epoch=3-val_loss=0.06.ckpt"
 
     ### point generation
 
     hexagon_resolution = 2
-    show_init_hexagons = False
-    show_post_hexagons = False
 
     ### climate data
 
     start_date = datetime(2003, 1, 1) # earliest is datetime(2003, 1, 1)
     end_date = datetime(2024, 12, 31) # latest is datetime(2024, 12, 31)
-    download_climate_data = False
-    redownload_climate_data = False
-    num_downloaders = 8
-
-    ### summary dataset
-
-    generate_summary_dataset = False # main driver for summary dataset
-    recreate_summary_dataset = False # if True, all data from summary dataset will be cleared before processing
-
     ### ML model
 
-    activate_tft = True
     benchmark_tft = False
     tune_hyperparams_tft = False
     train_tft = False
-    test_tft = True
+    test_tft = False
     tft_accelerator: Literal['cpu', 'gpu', 'tpu', 'auto'] = 'cpu' 
     tft_validation_workers = 0 # max 8 if gpu is used; 0 if cpu
     tft_training_workers = 0 # max 4 if gpu is used; 0 if cpu
